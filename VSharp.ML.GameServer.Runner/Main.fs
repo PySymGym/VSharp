@@ -1,5 +1,6 @@
 open System.IO
 open System.Net.Sockets
+open System
 open System.Reflection
 open Argu
 open Microsoft.FSharp.Core
@@ -282,6 +283,43 @@ let app port outputDirectory : WebPart =
             path "/gameServer" >=> handShake (ws port outputDirectory)
         ]
 
+let wsModelVal (runTraining: (string -> unit) -> unit) (webSocket: WebSocket) (context: HttpContext) =
+    let mutable is_gameover = true
+
+    socket {
+        let sendResponse (message: string) =
+            let byteResponse =
+                message |> System.Text.Encoding.UTF8.GetBytes |> ByteSegment
+            webSocket.send Text byteResponse true
+        let res =
+            let _ =
+                runTraining (fun msg -> (socket { do! sendResponse msg }) |> Async.RunSynchronously |> ignore)
+            ()
+        if res = () then
+            let _ =
+                socket {
+                    let closeCode =
+                        System.BitConverter.GetBytes (1000us)
+                    if System.BitConverter.IsLittleEndian then
+                        System.Array.Reverse (closeCode)
+                    let closeMessage = ByteSegment closeCode
+                    do! webSocket.send Close closeMessage true
+                }
+                |> Async.RunSynchronously
+                |> ignore
+            ()
+            System.Environment.Exit (0)
+    }
+
+
+
+let appModelVal (runTraining: (string -> unit) -> unit) : WebPart =
+    choose
+        [
+            path "/gameServer" >=> handShake (wsModelVal runTraining)
+        ]
+
+
 let serializeExplorationResult (explorationResult: ExplorationResult) =
     $"{explorationResult.ActualCoverage} {explorationResult.TestsCount} {explorationResult.StepsCount} {explorationResult.ErrorsCount}"
 
@@ -344,7 +382,7 @@ let runTrainingSendModelMode
     (pathToModel: string)
     (useGPU: bool)
     (optimize: bool)
-    (port: int)
+    (stepSaver: string -> Unit)
     =
     printfn $"Run infer on {gameMap.MapName} have started."
 
@@ -365,20 +403,13 @@ let runTrainingSendModelMode
             oracle = None
         }
 
-    let stream =
-        let host = "localhost" // TODO: working within a local network
-        let client = new TcpClient ()
-        client.Connect (host, port)
-        client.SendBufferSize <- 2048
-        Some <| client.GetStream ()
-
     let aiOptions: AIOptions =
         Training (
             SendModel
                 {
                     aiAgentTrainingOptions = aiTrainingOptions
                     outputDirectory = outputDirectory
-                    stream = stream
+                    stepSaver = stepSaver
                 }
         )
 
@@ -491,8 +522,20 @@ let main args =
             (args.TryGetResult <@ UseGPU @>).IsSome
         let optimize =
             (args.TryGetResult <@ Optimize @>).IsSome
+        try
+            startWebServer
+                { defaultConfig with
+                    logger = Targets.create Verbose [||]
+                    bindings =
+                        [
+                            HttpBinding.createSimple HTTP "127.0.0.1" port
+                        ]
+                }
+                (appModelVal (runTrainingSendModelMode outputDirectory gameMap model useGPU optimize))
+        with e ->
+            printfn $"Failed on port {port}"
+            printfn $"{e.Message}"
 
-        runTrainingSendModelMode outputDirectory gameMap model useGPU optimize port
     | Mode.Generator ->
         let datasetDescription =
             args.GetResult <@ DatasetDescription @>

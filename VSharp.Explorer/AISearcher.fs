@@ -229,33 +229,19 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                 JsonSerializer.Serialize arrayOutput
             arrayOutputJson
 
-        let stepToString (gameState: GameState) (output: IDisposableReadOnlyCollection<OrtValue>) =
-            let gameStateJson =
-                JsonSerializer.Serialize gameState
-            let outputJson = serializeOutput output
-            let DELIM = Environment.NewLine
-            let strToSaveAsList =
-                [
-                    gameStateJson
-                    DELIM
-                    outputJson
-                    DELIM
-                ]
-            String.concat " " strToSaveAsList
-
+        let stateToString = JsonSerializer.Serialize
+        let outputToString = serializeOutput
         let createOracleRunner (pathToONNX: string, aiAgentTrainingModelOptions: Option<AIAgentTrainingModelOptions>) =
-            let stream =
+            let stepSaver =
                 match aiAgentTrainingModelOptions with
-                | Some options -> options.stream
+                | Some options -> Some options.stepSaver
                 | None -> None
 
             let saveStep (gameState: GameState) (output: IDisposableReadOnlyCollection<OrtValue>) =
-                match stream with
-                | Some stream ->
-                    let bytes =
-                        Encoding.UTF8.GetBytes (stepToString gameState output)
-                    stream.Write (bytes, 0, bytes.Length)
-                    stream.Flush ()
+                match stepSaver with
+                | Some stepSaver ->
+                    stepSaver (stateToString gameState)
+                    stepSaver (outputToString output)
                 | None -> ()
 
             let sessionOptions =

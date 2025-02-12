@@ -79,7 +79,7 @@ type AIAgentTrainingModelOptions =
     {
         aiAgentTrainingOptions: AIAgentTrainingOptions
         outputDirectory: string
-        stream: Option<NetworkStream> // use it for sending steps
+        stepSaver: string -> Unit
     }
 
 
