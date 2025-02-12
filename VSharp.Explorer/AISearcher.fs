@@ -150,64 +150,69 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
         | None -> Runner
 
     let pick selector =
-        if useDefaultSearcher then
-            defaultSearcherSteps <- defaultSearcherSteps + 1u<step>
+        try
+            if useDefaultSearcher then
+                defaultSearcherSteps <- defaultSearcherSteps + 1u<step>
 
-            if Seq.length availableStates > 0 then
+                if Seq.length availableStates > 0 then
+                    let gameStateDelta =
+                        collectGameStateDelta ()
+                    gameState <- GameUtils.updateGameState gameStateDelta gameState
+                    let statistics =
+                        computeStatistics gameState.Value
+                    Application.applicationGraphDelta.Clear ()
+                    lastCollectedStatistics <- statistics
+                    useDefaultSearcher <- defaultSearcherSteps < stepsToSwitchToAI
+
+                defaultSearcher.Pick ()
+            elif Seq.length availableStates = 0 then
+                None
+            elif Seq.length availableStates = 1 then
+                Some (Seq.head availableStates)
+            else
                 let gameStateDelta =
                     collectGameStateDelta ()
                 gameState <- GameUtils.updateGameState gameStateDelta gameState
                 let statistics =
                     computeStatistics gameState.Value
+
+                if isInAIMode () then
+                    let reward =
+                        computeReward lastCollectedStatistics statistics
+                    oracle.Feedback (Feedback.MoveReward reward)
+
                 Application.applicationGraphDelta.Clear ()
-                lastCollectedStatistics <- statistics
-                useDefaultSearcher <- defaultSearcherSteps < stepsToSwitchToAI
 
-            defaultSearcher.Pick ()
-        elif Seq.length availableStates = 0 then
-            None
-        elif Seq.length availableStates = 1 then
-            Some (Seq.head availableStates)
-        else
-            let gameStateDelta =
-                collectGameStateDelta ()
-            gameState <- GameUtils.updateGameState gameStateDelta gameState
-            let statistics =
-                computeStatistics gameState.Value
-
-            if isInAIMode () then
-                let reward =
-                    computeReward lastCollectedStatistics statistics
-                oracle.Feedback (Feedback.MoveReward reward)
-
-            Application.applicationGraphDelta.Clear ()
-
-            if stepsToPlay = stepsPlayed then
-                None
-            else
-                let toPredict =
-                    match aiMode with
-                    | TrainingSendEachStep
-                    | TrainingSendModel ->
-                        if stepsPlayed > 0u<step> then
-                            gameStateDelta
-                        else
-                            gameState.Value
-                    | Runner -> gameState.Value
-
-                let stateId = oracle.Predict toPredict
-                afterFirstAIPeek <- true
-                let state =
-                    availableStates |> Seq.tryFind (fun s -> s.internalId = stateId)
-                lastCollectedStatistics <- statistics
-                stepsPlayed <- stepsPlayed + 1u<step>
-
-                match state with
-                | Some state -> Some state
-                | None ->
-                    incorrectPredictedStateId <- true
-                    oracle.Feedback (Feedback.IncorrectPredictedStateId stateId)
+                if stepsToPlay = stepsPlayed then
                     None
+                else
+                    let toPredict =
+                        match aiMode with
+                        | TrainingSendEachStep
+                        | TrainingSendModel ->
+                            if stepsPlayed > 0u<step> then
+                                gameStateDelta
+                            else
+                                gameState.Value
+                        | Runner -> gameState.Value
+
+                    let stateId = oracle.Predict toPredict
+                    afterFirstAIPeek <- true
+                    let state =
+                        availableStates |> Seq.tryFind (fun s -> s.internalId = stateId)
+                    lastCollectedStatistics <- statistics
+                    stepsPlayed <- stepsPlayed + 1u<step>
+
+                    match state with
+                    | Some state -> Some state
+                    | None ->
+                        incorrectPredictedStateId <- true
+                        oracle.Feedback (Feedback.IncorrectPredictedStateId stateId)
+                        None
+        with :? Exception as e ->
+            printfn "An error occurred: \n%s" e.Message
+            printfn "Stack Trace: \n%s" e.StackTrace
+            reraise ()
 
     new
         (
@@ -244,6 +249,8 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
             String.concat " " strToSaveAsList
 
         let createOracleRunner (pathToONNX: string, aiAgentTrainingModelOptions: Option<AIAgentTrainingModelOptions>) =
+            let mutable stepsPlayed = 0
+            let mutable currentGameState = None
             let stream =
                 match aiAgentTrainingModelOptions with
                 | Some options -> options.stream
@@ -257,6 +264,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                     stream.Write (bytes, 0, bytes.Length)
                     stream.Flush ()
                 | None -> ()
+
 
             let sessionOptions =
                 if useGPU then
@@ -275,9 +283,6 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
             let runOptions = new RunOptions ()
             let feedback (x: Feedback) = ()
-
-            let mutable stepsPlayed = 0
-            let mutable currentGameState = None
 
             let predict (gameStateOrDelta: GameState) =
                 let _ =
