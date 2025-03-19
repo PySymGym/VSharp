@@ -8,6 +8,7 @@ open System.Reflection
 open System.Collections.Generic
 open Microsoft.FSharp.Collections
 open VSharp
+open VSharp.Core
 
 type ICallGraphNode =
     inherit IGraphNode<ICallGraphNode>
@@ -519,7 +520,7 @@ and IGraphTrackableState =
     abstract member CodeLocation: codeLocation
     abstract member CallStack: list<Method>
     abstract member Id: uint<stateId>
-    abstract member PathConditionSize: uint    
+    abstract member PathCondition: pathCondition   
     abstract member VisitedNotCoveredVerticesInZone: uint with get
     abstract member VisitedNotCoveredVerticesOutOfZone: uint with get
     abstract member VisitedAgainVertices: uint with get
