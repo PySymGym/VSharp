@@ -23,22 +23,22 @@ type ExplorationResult =
     val TestsCount: uint<test>
     val ErrorsCount: uint<error>
     val StepsCount: uint<step>
+
     new(actualCoverage, testsCount, errorsCount, stepsCount) =
-        {
-            ActualCoverage = actualCoverage
-            TestsCount = testsCount
-            ErrorsCount = errorsCount
-            StepsCount = stepsCount
-        }
+        { ActualCoverage = actualCoverage
+          TestsCount = testsCount
+          ErrorsCount = errorsCount
+          StepsCount = stepsCount }
 
 type Mode =
     | Server = 0
     | Generator = 1
+
 type CliArguments =
     | [<Unique>] Port of int
     | [<Unique>] DatasetBasePath of string
     | [<Unique>] DatasetDescription of string
-    | [<Unique ; Mandatory>] Mode of Mode
+    | [<Unique; Mandatory>] Mode of Mode
     | [<Unique>] OutFolder of string
     | [<Unique>] StepsToSerialize of uint
     | [<Unique>] UseGPU
@@ -62,21 +62,21 @@ type CliArguments =
 let mutable inTrainMode = true
 
 let explore (gameMap: GameMap) options =
-    let assembly =
-        RunnerProgram.TryLoadAssembly <| FileInfo gameMap.AssemblyFullName
-    let method =
-        RunnerProgram.ResolveMethod (assembly, gameMap.NameOfObjectToCover)
-    let statistics =
-        TestGenerator.Cover (method, options)
+    let assembly = RunnerProgram.TryLoadAssembly <| FileInfo gameMap.AssemblyFullName
+    let method = RunnerProgram.ResolveMethod(assembly, gameMap.NameOfObjectToCover)
+    let statistics = TestGenerator.Cover(method, options)
+
     let actualCoverage =
         try
             let testsDir = statistics.OutputDir
             let _expectedCoverage = 100
-            let exploredMethodInfo =
-                AssemblyManager.NormalizeMethod method
+            let exploredMethodInfo = AssemblyManager.NormalizeMethod method
+
             let status, actualCoverage, message =
-                VSharp.Test.TestResultChecker.Check (testsDir, exploredMethodInfo :?> MethodInfo, _expectedCoverage)
+                VSharp.Test.TestResultChecker.Check(testsDir, exploredMethodInfo :?> MethodInfo, _expectedCoverage)
+
             printfn $"Actual coverage for {gameMap.MapName}: {actualCoverage}"
+
             if actualCoverage < 0 then
                 0u<percent>
             else
@@ -85,7 +85,7 @@ let explore (gameMap: GameMap) options =
             printfn $"Coverage checking problem:{e.Message} \n {e.StackTrace}"
             0u<percent>
 
-    ExplorationResult (
+    ExplorationResult(
         actualCoverage,
         statistics.TestsCount * 1u<test>,
         statistics.ErrorsCount * 1u<error>,
@@ -94,11 +94,12 @@ let explore (gameMap: GameMap) options =
 
 
 let loadGameMaps (datasetDescriptionFilePath: string) =
-    let jsonString =
-        File.ReadAllText datasetDescriptionFilePath
-    let maps = ResizeArray<GameMap> ()
+    let jsonString = File.ReadAllText datasetDescriptionFilePath
+    let maps = ResizeArray<GameMap>()
+
     for map in System.Text.Json.JsonSerializer.Deserialize<GameMap[]> jsonString do
         maps.Add map
+
     maps
 
 let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
@@ -111,6 +112,7 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
                 serializeOutgoingMessage message
                 |> System.Text.Encoding.UTF8.GetBytes
                 |> ByteSegment
+
             webSocket.send Text byteResponse true
 
         let oracle =
@@ -123,17 +125,20 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
                                 | Feedback.ServerError s -> OutgoingMessage.ServerError s
                                 | Feedback.MoveReward reward -> OutgoingMessage.MoveReward reward
                                 | Feedback.IncorrectPredictedStateId i -> OutgoingMessage.IncorrectPredictedStateId i
+
                             do! sendResponse message
                         }
+
                     match Async.RunSynchronously res with
-                    | Choice1Of2 () -> ()
+                    | Choice1Of2() -> ()
                     | Choice2Of2 error -> failwithf $"Error: %A{error}"
 
             let predict =
                 let mutable cnt = 0u
+
                 fun (gameState: GameState) ->
                     let toDot drawHistory =
-                        let file = Path.Join ("dot", $"{cnt}.dot")
+                        let file = Path.Join("dot", $"{cnt}.dot")
                         gameState.ToDot file drawHistory
                         cnt <- cnt + 1u
                     //toDot false
@@ -141,48 +146,54 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
                         socket {
                             do! sendResponse (ReadyForNextStep gameState)
                             let! msg = webSocket.read ()
+
                             let res =
                                 match msg with
                                 | (Text, data, true) ->
                                     let msg = deserializeInputMessage data
+
                                     match msg with
                                     | Step stepParams -> (stepParams.StateId)
                                     | _ -> failwithf $"Unexpected message: %A{msg}"
                                 | _ -> failwithf $"Unexpected message: %A{msg}"
+
                             return res
                         }
+
                     match Async.RunSynchronously res with
                     | Choice1Of2 i -> i
                     | Choice2Of2 error -> failwithf $"Error: %A{error}"
 
-            Oracle (predict, feedback)
+            Oracle(predict, feedback)
 
         while loop do
             let! msg = webSocket.read ()
+
             match msg with
             | (Text, data, true) ->
                 let message = deserializeInputMessage data
+
                 match message with
                 | ServerStop -> loop <- false
                 | Start gameMap ->
                     printfn $"Start map {gameMap.MapName}, port {port}"
                     let stepsToStart = gameMap.StepsToStart
                     let stepsToPlay = gameMap.StepsToPlay
+
                     let aiTrainingOptions =
-                        {
-                            stepsToSwitchToAI = stepsToStart
-                            stepsToPlay = stepsToPlay
-                            defaultSearchStrategy =
-                                match gameMap.DefaultSearcher with
-                                | searcher.BFS -> BFSMode
-                                | searcher.DFS -> DFSMode
-                                | x -> failwithf $"Unexpected searcher {x}. Use DFS or BFS for now."
-                            serializeSteps = false
-                            mapName = gameMap.MapName
-                            oracle = Some oracle
-                        }
+                        { stepsToSwitchToAI = stepsToStart
+                          stepsToPlay = stepsToPlay
+                          defaultSearchStrategy =
+                            match gameMap.DefaultSearcher with
+                            | searcher.BFS -> BFSMode
+                            | searcher.DFS -> DFSMode
+                            | x -> failwithf $"Unexpected searcher {x}. Use DFS or BFS for now."
+                          serializeSteps = false
+                          mapName = gameMap.MapName
+                          oracle = Some oracle }
+
                     let options =
-                        VSharpOptions (
+                        VSharpOptions(
                             timeout = 15 * 60,
                             outputDirectory = outputDirectory,
                             searchStrategy = SearchStrategy.AI,
@@ -190,20 +201,23 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
                             stepsLimit = uint (stepsToPlay + stepsToStart),
                             solverTimeout = 2
                         )
-                    let explorationResult =
-                        explore gameMap options
+
+                    let explorationResult = explore gameMap options
 
                     Application.reset ()
-                    API.Reset ()
-                    HashMap.hashMap.Clear ()
+                    API.Reset()
+                    HashMap.hashMap.Clear()
+                    Serializer.pathConditionVertices.Clear()
+
                     do!
                         sendResponse (
-                            GameOver (
+                            GameOver(
                                 explorationResult.ActualCoverage,
                                 explorationResult.TestsCount,
                                 explorationResult.ErrorsCount
                             )
                         )
+
                     printfn $"Finish map {gameMap.MapName}, port {port}"
                 | x -> failwithf $"Unexpected message: %A{x}"
 
@@ -215,36 +229,33 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
     }
 
 let app port outputDirectory : WebPart =
-    choose
-        [
-            path "/gameServer" >=> handShake (ws port outputDirectory)
-        ]
+    choose [ path "/gameServer" >=> handShake (ws port outputDirectory) ]
 
 let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArray<GameMap>) stepsToSerialize =
     for map in maps do
         if map.StepsToStart = 0u<step> then
             printfn $"Generation for {map.MapName} started."
+
             let map =
-                GameMap (
+                GameMap(
                     map.StepsToPlay,
                     map.StepsToStart,
-                    Path.Combine (datasetBasePath, map.AssemblyFullName),
+                    Path.Combine(datasetBasePath, map.AssemblyFullName),
                     map.DefaultSearcher,
                     map.NameOfObjectToCover,
                     map.MapName
                 )
+
             let aiTrainingOptions =
-                {
-                    stepsToSwitchToAI = 0u<step>
-                    stepsToPlay = 0u<step>
-                    defaultSearchStrategy = searchMode.BFSMode
-                    serializeSteps = true
-                    mapName = map.MapName
-                    oracle = None
-                }
+                { stepsToSwitchToAI = 0u<step>
+                  stepsToPlay = 0u<step>
+                  defaultSearchStrategy = searchMode.BFSMode
+                  serializeSteps = true
+                  mapName = map.MapName
+                  oracle = None }
 
             let options =
-                VSharpOptions (
+                VSharpOptions(
                     timeout = 5 * 60,
                     outputDirectory = outputDirectory,
                     searchStrategy = SearchStrategy.ExecutionTreeContributedCoverage,
@@ -252,28 +263,34 @@ let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArra
                     solverTimeout = 2,
                     aiAgentTrainingOptions = aiTrainingOptions
                 )
+
             let folderForResults =
                 Serializer.getFolderToStoreSerializationResult outputDirectory map.MapName
+
             if Directory.Exists folderForResults then
-                Directory.Delete (folderForResults, true)
-            let _ =
-                Directory.CreateDirectory folderForResults
+                Directory.Delete(folderForResults, true)
+
+            let _ = Directory.CreateDirectory folderForResults
 
             let explorationResult = explore map options
-            File.WriteAllText (
-                Path.Join (folderForResults, "result"),
+
+            File.WriteAllText(
+                Path.Join(folderForResults, "result"),
                 $"{explorationResult.ActualCoverage} {explorationResult.TestsCount} {explorationResult.StepsCount} {explorationResult.ErrorsCount}"
             )
+
             printfn
                 $"Generation for {map.MapName} finished with coverage {explorationResult.ActualCoverage}, tests {explorationResult.TestsCount}, steps {explorationResult.StepsCount},errors {explorationResult.ErrorsCount}."
+
             Application.reset ()
-            API.Reset ()
-            HashMap.hashMap.Clear ()
+            API.Reset()
+            HashMap.hashMap.Clear()
 
 [<EntryPoint>]
 let main args =
     let parser =
-        ArgumentParser.Create<CliArguments> (programName = "VSharp.ML.GameServer.Runner.exe")
+        ArgumentParser.Create<CliArguments>(programName = "VSharp.ML.GameServer.Runner.exe")
+
     let args = parser.Parse args
 
     let mode = args.GetResult <@ Mode @>
@@ -298,19 +315,16 @@ let main args =
         | Some steps -> steps
         | None -> 500u
 
-    let useGPU =
-        (args.TryGetResult <@ UseGPU @>).IsSome
+    let useGPU = (args.TryGetResult <@ UseGPU @>).IsSome
 
-    let optimize =
-        (args.TryGetResult <@ Optimize @>).IsSome
+    let optimize = (args.TryGetResult <@ Optimize @>).IsSome
 
-    let outputDirectory =
-        Path.Combine (Directory.GetCurrentDirectory (), string port)
+    let outputDirectory = Path.Combine(Directory.GetCurrentDirectory(), string port)
 
     if Directory.Exists outputDirectory then
-        Directory.Delete (outputDirectory, true)
-    let testsDirInfo =
-        Directory.CreateDirectory outputDirectory
+        Directory.Delete(outputDirectory, true)
+
+    let testsDirInfo = Directory.CreateDirectory outputDirectory
     printfn $"outputDir: {outputDirectory}"
 
     match mode with
@@ -319,11 +333,7 @@ let main args =
             startWebServer
                 { defaultConfig with
                     logger = Targets.create Verbose [||]
-                    bindings =
-                        [
-                            HttpBinding.createSimple HTTP "127.0.0.1" port
-                        ]
-                }
+                    bindings = [ HttpBinding.createSimple HTTP "127.0.0.1" port ] }
                 (app port outputDirectory)
         with e ->
             printfn $"Failed on port {port}"
