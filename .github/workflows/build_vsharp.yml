@@ -8,10 +8,10 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
     - name: Checkout VSharp
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         submodules: false
-    - uses: actions/cache@v3
+    - uses: actions/cache@v4
       id: nuget-cache
       with:
         path: ~/.nuget/packages
@@ -21,11 +21,11 @@ jobs:
     - name: Build VSharp
       run:
         dotnet build -c DebugTailRec
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: runner
         path: ./VSharp.Runner/bin/DebugTailRec/net7.0
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       with:
         name: test_runner
         path: ./VSharp.TestRunner/bin/DebugTailRec/net7.0
