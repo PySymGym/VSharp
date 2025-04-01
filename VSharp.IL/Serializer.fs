@@ -348,13 +348,14 @@ let collectStatesInfoToDump (basicBlocks: ResizeArray<BasicBlock>) =
 
     statesInfoToDump
 
-let getFirstFreePathConditionVertexId =
+let getFirstFreePathConditionVertexId, resetPathConditionVertexIdCounter =
     let mutable count = 0u<pathConditionVertexId>
 
     fun () ->
         let res = count
         count <- count + 1u<pathConditionVertexId>
         res
+    , fun () -> count <- 0u<pathConditionVertexId>
 
 let pathConditionVertices = Dictionary<Core.term, PathConditionVertex>()
 
