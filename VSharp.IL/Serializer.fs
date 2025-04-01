@@ -360,28 +360,30 @@ let getFirstFreePathConditionVertexId, resetPathConditionVertexIdCounter =
 let pathConditionVertices = Dictionary<Core.term, PathConditionVertex>()
 
 let collectPathCondition term (processedPathConditionVertices: Dictionary<Core.term, PathConditionVertex>) = // TODO: Support other operations
-    let termsToVisit =
-        Stack<Core.term * uint<pathConditionVertexId>> [| (term, getFirstFreePathConditionVertexId ()) |]
+    let termsToVisit = Stack<Core.term> [| term |]
+    let termsWithId = Dictionary<Core.term, uint<pathConditionVertexId>>()
 
     let pathConditionDelta = ResizeArray<PathConditionVertex>()
 
     while termsToVisit.Count > 0 do
-        let currentTerm, currentTermId = termsToVisit.Pop()
+        let currentTerm = termsToVisit.Pop()
+
+        let getIdForTerm term =
+            if termsWithId.ContainsKey term then
+                termsWithId.[term]
+            else
+                let newId = getFirstFreePathConditionVertexId ()
+                termsWithId.Add(term, newId)
+                newId
 
         let markAsVisited (vertexType: pathConditionVertexType) children =
-            let newVertex = PathConditionVertex(currentTermId, vertexType, children)
+            let newVertex = PathConditionVertex(getIdForTerm currentTerm, vertexType, children)
             processedPathConditionVertices.Add(currentTerm, newVertex)
             pathConditionDelta.Add newVertex
 
         let handleTerm term (children: ResizeArray<_>) =
-            let termId =
-                if not <| processedPathConditionVertices.ContainsKey term then
-                    getFirstFreePathConditionVertexId ()
-                else
-                    processedPathConditionVertices.[term].Id
-
-            children.Add termId
-            termsToVisit.Push((term, termId))
+            children.Add(getIdForTerm term)
+            termsToVisit.Push term
 
         if not <| processedPathConditionVertices.ContainsKey currentTerm then
             match currentTerm.term with
