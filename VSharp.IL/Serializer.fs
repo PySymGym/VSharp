@@ -175,6 +175,7 @@ let calculateStateMetrics interproceduralGraphDistanceFrom (state: IGraphTrackab
             let mutable notVisitedBasicBlocksInZone = 0
             let mutable notTouchedBasicBlocksInZone = 0
             let basicBlocks = HashSet<_>()
+
             currentBasicBlock.OutgoingEdges.Values |> Seq.iter basicBlocks.UnionWith
 
             basicBlocks
@@ -358,11 +359,14 @@ let getFirstFreePathConditionVertexId, resetPathConditionVertexIdCounter =
     , fun () -> count <- 0u<pathConditionVertexId>
 
 let pathConditionVertices = Dictionary<Core.term, PathConditionVertex>()
+let termsWithId = Dictionary<Core.term, uint<pathConditionVertexId>>()
 
-let collectPathCondition term (processedPathConditionVertices: Dictionary<Core.term, PathConditionVertex>) = // TODO: Support other operations
+let collectPathCondition
+    term
+    (termsWithId: Dictionary<Core.term, uint<pathConditionVertexId>>)
+    (processedPathConditionVertices: Dictionary<Core.term, PathConditionVertex>)
+    = // TODO: Support other operations
     let termsToVisit = Stack<Core.term> [| term |]
-    let termsWithId = Dictionary<Core.term, uint<pathConditionVertexId>>()
-
     let pathConditionDelta = ResizeArray<PathConditionVertex>()
 
     while termsToVisit.Count > 0 do
@@ -469,7 +473,7 @@ let collectPathCondition term (processedPathConditionVertices: Dictionary<Core.t
 
     pathConditionDelta
 
-let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates processedPathConditionVertices =
+let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates processedPathConditionVertices termsWithId =
 
     let vertices = ResizeArray<_>()
     let allStates = HashSet<_>()
@@ -489,7 +493,7 @@ let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates process
                 let pathCondition = s.PathCondition |> PC.toSeq
 
                 for term in pathCondition do
-                    pathConditionDelta.AddRange(collectPathCondition term processedPathConditionVertices)
+                    pathConditionDelta.AddRange(collectPathCondition term termsWithId processedPathConditionVertices)
 
                 let pathConditionRoot =
                     PathConditionVertex(
@@ -559,7 +563,7 @@ let collectGameStateDelta () =
             let added = basicBlocks.Add(basicBlock)
             ()
 
-    collectGameState (ResizeArray basicBlocks) false pathConditionVertices
+    collectGameState (ResizeArray basicBlocks) false pathConditionVertices termsWithId
 
 let dumpGameState fileForResultWithoutExtension (movedStateId: uint<stateId>) =
     let basicBlocks = ResizeArray<_>()
@@ -570,7 +574,11 @@ let dumpGameState fileForResultWithoutExtension (movedStateId: uint<stateId>) =
             basicBlocks.Add(basicBlock)
 
     let gameState =
-        collectGameState basicBlocks true (Dictionary<Core.term, PathConditionVertex>())
+        collectGameState
+            basicBlocks
+            true
+            (Dictionary<Core.term, PathConditionVertex>())
+            (Dictionary<Core.term, uint<pathConditionVertexId>>())
 
     let statesInfoToDump = collectStatesInfoToDump basicBlocks
     let gameStateJson = JsonSerializer.Serialize gameState

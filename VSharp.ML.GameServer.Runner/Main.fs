@@ -209,6 +209,7 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
                     HashMap.hashMap.Clear()
                     Serializer.pathConditionVertices.Clear()
                     Serializer.resetPathConditionVertexIdCounter ()
+                    Serializer.termsWithId.Clear()
 
                     do!
                         sendResponse (
