@@ -14,61 +14,6 @@ type AIMode =
     | TrainingSendModel
     | TrainingSendEachStep
 
-module GameUtils =
-    let updateGameState (delta: GameState) (gameState: Option<GameState>) =
-        match gameState with
-        | None -> Some delta
-        | Some s ->
-            let updatedBasicBlocks = delta.GraphVertices |> Array.map (fun b -> b.Id) |> HashSet
-            let updatedStates = delta.States |> Array.map (fun s -> s.Id) |> HashSet
-
-            let vertices =
-                s.GraphVertices
-                |> Array.filter (fun v -> updatedBasicBlocks.Contains v.Id |> not)
-                |> ResizeArray<_>
-
-            vertices.AddRange delta.GraphVertices
-
-            let edges =
-                s.Map
-                |> Array.filter (fun e -> updatedBasicBlocks.Contains e.VertexFrom |> not)
-                |> ResizeArray<_>
-
-            edges.AddRange delta.Map
-            let activeStates = vertices |> Seq.collect (fun v -> v.States) |> HashSet
-
-            let states =
-                let part1 =
-                    s.States
-                    |> Array.filter (fun s -> activeStates.Contains s.Id && (not <| updatedStates.Contains s.Id))
-                    |> ResizeArray<_>
-
-                part1.AddRange delta.States
-
-                part1.ToArray()
-                |> Array.map (fun s ->
-                    State(
-                        s.Id,
-                        s.Position,
-                        s.PathCondition,
-                        s.VisitedAgainVertices,
-                        s.VisitedNotCoveredVerticesInZone,
-                        s.VisitedNotCoveredVerticesOutOfZone,
-                        s.StepWhenMovedLastTime,
-                        s.InstructionsVisitedInCurrentBlock,
-                        s.History,
-                        s.Children |> Array.filter activeStates.Contains
-                    ))
-
-            let pathConditionVertices = ResizeArray<PathConditionVertex> s.PathConditionVertices
-
-            pathConditionVertices.AddRange delta.PathConditionVertices
-
-            Some <| GameState(vertices.ToArray(), states, pathConditionVertices.ToArray(), edges.ToArray())
-
-    let convertOutputToJson (output: IDisposableReadOnlyCollection<OrtValue>) =
-        seq { 0 .. output.Count - 1 }
-        |> Seq.map (fun i -> output[i].GetTensorDataAsSpan<float32>().ToArray())
 
 type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrainingMode>) =
     let stepsToSwitchToAI =
@@ -149,14 +94,13 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
         | Some(SendEachStep _) -> TrainingSendEachStep
         | Some(SendModel _) -> TrainingSendModel
         | None -> Runner
-
     let pick selector =
         if useDefaultSearcher then
             defaultSearcherSteps <- defaultSearcherSteps + 1u<step>
 
             if Seq.length availableStates > 0 then
                 let gameStateDelta = collectGameStateDelta ()
-                gameState <- GameUtils.updateGameState gameStateDelta gameState
+                gameState <- AISearcher.updateGameState gameStateDelta gameState
                 let statistics = computeStatistics gameState.Value
                 Application.applicationGraphDelta.Clear()
                 lastCollectedStatistics <- statistics
@@ -169,7 +113,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
             Some(Seq.head availableStates)
         else
             let gameStateDelta = collectGameStateDelta ()
-            gameState <- GameUtils.updateGameState gameStateDelta gameState
+            gameState <- AISearcher.updateGameState gameStateDelta gameState
             let statistics = computeStatistics gameState.Value
 
             if isInAIMode () then
@@ -203,6 +147,63 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                     incorrectPredictedStateId <- true
                     oracle.Feedback(Feedback.IncorrectPredictedStateId stateId)
                     None
+    static member updateGameState (delta: GameState) (gameState: Option<GameState>) =
+        match gameState with
+        | None -> Some delta
+        | Some s ->
+            let updatedBasicBlocks = delta.GraphVertices |> Array.map (fun b -> b.Id) |> HashSet
+            let updatedStates = delta.States |> Array.map (fun s -> s.Id) |> HashSet
+
+            let vertices =
+                s.GraphVertices
+                |> Array.filter (fun v -> updatedBasicBlocks.Contains v.Id |> not)
+                |> ResizeArray<_>
+
+            vertices.AddRange delta.GraphVertices
+
+            let edges =
+                s.Map
+                |> Array.filter (fun e -> updatedBasicBlocks.Contains e.VertexFrom |> not)
+                |> ResizeArray<_>
+
+            edges.AddRange delta.Map
+            let activeStates = vertices |> Seq.collect (fun v -> v.States) |> HashSet
+
+            let states =
+                let part1 =
+                    s.States
+                    |> Array.filter (fun s -> activeStates.Contains s.Id && (not <| updatedStates.Contains s.Id))
+                    |> ResizeArray<_>
+
+                part1.AddRange delta.States
+
+                part1.ToArray()
+                |> Array.map (fun s ->
+                    State(
+                        s.Id,
+                        s.Position,
+                        s.PathCondition,
+                        s.VisitedAgainVertices,
+                        s.VisitedNotCoveredVerticesInZone,
+                        s.VisitedNotCoveredVerticesOutOfZone,
+                        s.StepWhenMovedLastTime,
+                        s.InstructionsVisitedInCurrentBlock,
+                        s.History,
+                        s.Children |> Array.filter activeStates.Contains
+                    ))
+
+            let pathConditionVertices = ResizeArray<PathConditionVertex> s.PathConditionVertices
+
+            pathConditionVertices.AddRange delta.PathConditionVertices
+
+            Some
+            <| GameState(vertices.ToArray(), states, pathConditionVertices.ToArray(), edges.ToArray())
+
+    static member convertOutputToJson (output: IDisposableReadOnlyCollection<OrtValue>) =
+        seq { 0 .. output.Count - 1 }
+        |> Seq.map (fun i -> output[i].GetTensorDataAsSpan<float32>().ToArray())
+
+    
 
     new
         (
@@ -241,7 +242,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                 let _ =
                     match aiAgentTrainingModelOptions with
                     | Some _ when not (stepsPlayed = 0) ->
-                        currentGameState <- GameUtils.updateGameState gameStateOrDelta currentGameState
+                        currentGameState <- AISearcher.updateGameState gameStateOrDelta currentGameState
                     | _ -> currentGameState <- Some gameStateOrDelta
 
                 let gameState = currentGameState.Value
@@ -397,7 +398,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                     match aiAgentTrainingModelOptions with
                     | Some aiAgentOptions ->
                         aiAgentOptions.stepSaver (
-                            AIGameStep(gameState = gameStateOrDelta, output = GameUtils.convertOutputToJson output)
+                            AIGameStep(gameState = gameStateOrDelta, output = AISearcher.convertOutputToJson output)
                         )
                     | None -> ()
 
