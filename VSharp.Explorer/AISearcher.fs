@@ -2,48 +2,22 @@ namespace VSharp.Explorer
 
 open System.Collections.Generic
 open Microsoft.ML.OnnxRuntime
+open System
+open System.Text
+open System.Text.Json
 open VSharp
 open VSharp.IL.Serializer
 open VSharp.ML.GameServer.Messages
 
-type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentTrainingOptions>) =
-    let stepsToSwitchToAI =
-        match aiAgentTrainingOptions with
-        | None -> 0u<step>
-        | Some options -> options.stepsToSwitchToAI
+type AIMode =
+    | Runner
+    | TrainingSendModel
+    | TrainingSendEachStep
 
-    let stepsToPlay =
-        match aiAgentTrainingOptions with
-        | None -> 0u<step>
-        | Some options -> options.stepsToPlay
-
-    let mutable lastCollectedStatistics = Statistics()
-    let mutable defaultSearcherSteps = 0u<step>
-    let mutable (gameState: Option<GameState>) = None
-    let mutable useDefaultSearcher = stepsToSwitchToAI > 0u<step>
-    let mutable afterFirstAIPeek = false
-    let mutable incorrectPredictedStateId = false
-
-    let defaultSearcher =
-        match aiAgentTrainingOptions with
-        | None -> BFSSearcher() :> IForwardSearcher
-        | Some options ->
-            match options.defaultSearchStrategy with
-            | BFSMode -> BFSSearcher() :> IForwardSearcher
-            | DFSMode -> DFSSearcher() :> IForwardSearcher
-            | x -> failwithf $"Unexpected default searcher {x}. DFS and BFS supported for now."
-
-    let mutable stepsPlayed = 0u<step>
-
-    let isInAIMode () =
-        (not useDefaultSearcher) && afterFirstAIPeek
-
-    let q = ResizeArray<_>()
-    let availableStates = HashSet<_>()
-
-    let updateGameState (delta: GameState) =
+module GameUtils =
+    let updateGameState (delta: GameState) (gameState: Option<GameState>) =
         match gameState with
-        | None -> gameState <- Some delta
+        | None -> Some delta
         | Some s ->
             let updatedBasicBlocks = delta.GraphVertices |> Array.map (fun b -> b.Id) |> HashSet
             let updatedStates = delta.States |> Array.map (fun s -> s.Id) |> HashSet
@@ -86,14 +60,56 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
                         s.Children |> Array.filter activeStates.Contains
                     ))
 
-            let pathConditionVertices =
-                ResizeArray<PathConditionVertex> s.PathConditionVertices
+            let pathConditionVertices = ResizeArray<PathConditionVertex> s.PathConditionVertices
 
             pathConditionVertices.AddRange delta.PathConditionVertices
 
-            gameState <-
-                Some
-                <| GameState(vertices.ToArray(), states, pathConditionVertices.ToArray(), edges.ToArray())
+            Some <| GameState(vertices.ToArray(), states, pathConditionVertices.ToArray(), edges.ToArray())
+
+    let convertOutputToJson (output: IDisposableReadOnlyCollection<OrtValue>) =
+        seq { 0 .. output.Count - 1 }
+        |> Seq.map (fun i -> output[i].GetTensorDataAsSpan<float32>().ToArray())
+
+type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrainingMode>) =
+    let stepsToSwitchToAI =
+        match aiAgentTrainingMode with
+        | None -> 0u<step>
+        | Some(SendModel options) -> options.aiAgentTrainingOptions.stepsToSwitchToAI
+        | Some(SendEachStep options) -> options.aiAgentTrainingOptions.stepsToSwitchToAI
+
+    let stepsToPlay =
+        match aiAgentTrainingMode with
+        | None -> 0u<step>
+        | Some(SendModel options) -> options.aiAgentTrainingOptions.stepsToPlay
+        | Some(SendEachStep options) -> options.aiAgentTrainingOptions.stepsToPlay
+
+    let mutable lastCollectedStatistics = Statistics()
+    let mutable defaultSearcherSteps = 0u<step>
+    let mutable (gameState: Option<GameState>) = None
+    let mutable useDefaultSearcher = stepsToSwitchToAI > 0u<step>
+    let mutable afterFirstAIPeek = false
+    let mutable incorrectPredictedStateId = false
+
+    let defaultSearcher =
+        let pickSearcher =
+            function
+            | BFSMode -> BFSSearcher() :> IForwardSearcher
+            | DFSMode -> DFSSearcher() :> IForwardSearcher
+            | x -> failwithf $"Unexpected default searcher {x}. DFS and BFS supported for now."
+
+        match aiAgentTrainingMode with
+        | None -> BFSSearcher() :> IForwardSearcher
+        | Some(SendModel options) -> pickSearcher options.aiAgentTrainingOptions.aiBaseOptions.defaultSearchStrategy
+        | Some(SendEachStep options) -> pickSearcher options.aiAgentTrainingOptions.aiBaseOptions.defaultSearchStrategy
+
+    let mutable stepsPlayed = 0u<step>
+
+    let isInAIMode () =
+        (not useDefaultSearcher) && afterFirstAIPeek
+
+    let q = ResizeArray<_>()
+    let availableStates = HashSet<_>()
+
 
 
     let init states =
@@ -128,7 +144,11 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
         for bb in state._history do
             bb.Key.AssociatedStates.Remove state |> ignore
 
-    let inTrainMode = aiAgentTrainingOptions.IsSome
+    let aiMode =
+        match aiAgentTrainingMode with
+        | Some(SendEachStep _) -> TrainingSendEachStep
+        | Some(SendModel _) -> TrainingSendModel
+        | None -> Runner
 
     let pick selector =
         if useDefaultSearcher then
@@ -136,7 +156,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
 
             if Seq.length availableStates > 0 then
                 let gameStateDelta = collectGameStateDelta ()
-                updateGameState gameStateDelta
+                gameState <- GameUtils.updateGameState gameStateDelta gameState
                 let statistics = computeStatistics gameState.Value
                 Application.applicationGraphDelta.Clear()
                 lastCollectedStatistics <- statistics
@@ -149,7 +169,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
             Some(Seq.head availableStates)
         else
             let gameStateDelta = collectGameStateDelta ()
-            updateGameState gameStateDelta
+            gameState <- GameUtils.updateGameState gameStateDelta gameState
             let statistics = computeStatistics gameState.Value
 
             if isInAIMode () then
@@ -158,14 +178,18 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
 
             Application.applicationGraphDelta.Clear()
 
-            if inTrainMode && stepsToPlay = stepsPlayed then
+            if stepsToPlay = stepsPlayed then
                 None
             else
                 let toPredict =
-                    if inTrainMode && stepsPlayed > 0u<step> then
-                        gameStateDelta
-                    else
-                        gameState.Value
+                    match aiMode with
+                    | TrainingSendEachStep
+                    | TrainingSendModel ->
+                        if stepsPlayed > 0u<step> then
+                            gameStateDelta
+                        else
+                            gameState.Value
+                    | Runner -> gameState.Value
 
                 let stateId = oracle.Predict toPredict
                 afterFirstAIPeek <- true
@@ -180,12 +204,19 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
                     oracle.Feedback(Feedback.IncorrectPredictedStateId stateId)
                     None
 
-    new(pathToONNX: string, useGPU: bool, optimize: bool) =
+    new
+        (
+            pathToONNX: string,
+            useGPU: bool,
+            optimize: bool,
+            aiAgentTrainingModelOptions: Option<AIAgentTrainingModelOptions>
+        ) =
         let numOfVertexAttributes = 7
         let numOfStateAttributes = 7
         let numOfHistoryEdgeAttributes = 2
 
-        let createOracle (pathToONNX: string) =
+
+        let createOracleRunner (pathToONNX: string, aiAgentTrainingModelOptions: Option<AIAgentTrainingModelOptions>) =
             let sessionOptions =
                 if useGPU then
                     SessionOptions.MakeSessionOptionWithCudaProvider(0)
@@ -199,10 +230,21 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
                 sessionOptions.GraphOptimizationLevel <- GraphOptimizationLevel.ORT_ENABLE_BASIC
 
             let session = new InferenceSession(pathToONNX, sessionOptions)
+
             let runOptions = new RunOptions()
             let feedback (x: Feedback) = ()
 
-            let predict (gameState: GameState) =
+            let mutable stepsPlayed = 0
+            let mutable currentGameState = None
+
+            let predict (gameStateOrDelta: GameState) =
+                let _ =
+                    match aiAgentTrainingModelOptions with
+                    | Some _ when not (stepsPlayed = 0) ->
+                        currentGameState <- GameUtils.updateGameState gameStateOrDelta currentGameState
+                    | _ -> currentGameState <- Some gameStateOrDelta
+
+                let gameState = currentGameState.Value
                 let stateIds = Dictionary<uint<stateId>, int>()
                 let verticesIds = Dictionary<uint<basicBlockGlobalId>, int>()
 
@@ -243,7 +285,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
                             let j = i * numOfStateAttributes
                             attributes.[j] <- float32 v.Position
                             // TODO: Support path condition
-                            // attributes.[j + 1] <- float32 v.PathConditionSize 
+                            // attributes.[j + 1] <- float32 v.PathConditionSize
                             attributes.[j + 2] <- float32 v.VisitedAgainVertices
                             attributes.[j + 3] <- float32 v.VisitedNotCoveredVerticesInZone
                             attributes.[j + 4] <- float32 v.VisitedNotCoveredVerticesOutOfZone
@@ -350,6 +392,17 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
                     res
 
                 let output = session.Run(runOptions, networkInput, session.OutputNames)
+
+                let _ =
+                    match aiAgentTrainingModelOptions with
+                    | Some aiAgentOptions ->
+                        aiAgentOptions.stepSaver (
+                            AIGameStep(gameState = gameStateOrDelta, output = GameUtils.convertOutputToJson output)
+                        )
+                    | None -> ()
+
+                stepsPlayed <- stepsPlayed + 1
+
                 let weighedStates = output[0].GetTensorDataAsSpan<float32>().ToArray()
 
                 let id = weighedStates |> Array.mapi (fun i v -> i, v) |> Array.maxBy snd |> fst
@@ -357,7 +410,12 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingOptions: Option<AIAgentT
 
             Oracle(predict, feedback)
 
-        AISearcher(createOracle pathToONNX, None)
+        let aiAgentTrainingOptions =
+            match aiAgentTrainingModelOptions with
+            | Some aiAgentTrainingModelOptions -> Some(SendModel aiAgentTrainingModelOptions)
+            | None -> None
+
+        AISearcher(createOracleRunner (pathToONNX, aiAgentTrainingModelOptions), aiAgentTrainingOptions)
 
     interface IForwardSearcher with
         override x.Init states = init states
