@@ -392,15 +392,10 @@ let main args =
     let args = parser.Parse args
     let mode = args.GetResult <@ Mode @>
 
-    let port =
-        match args.TryGetResult <@ Port @> with
-        | Some port -> port
-        | None -> 8100
+    let port = args.GetResult(Port, defaultValue = 8100)
 
     let outputDirectory =
-        match args.TryGetResult <@ OutFolder @> with
-        | Some path -> path
-        | None -> Path.Combine(Directory.GetCurrentDirectory(), string port)
+        args.GetResult(OutFolder, defaultValue = Path.Combine(Directory.GetCurrentDirectory(), string port))
 
     let cleanOutputDirectory () =
         if Directory.Exists outputDirectory then
