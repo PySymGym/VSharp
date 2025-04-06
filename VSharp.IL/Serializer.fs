@@ -358,13 +358,13 @@ let getFirstFreePathConditionVertexId, resetPathConditionVertexIdCounter =
         res
     , fun () -> count <- 0u<pathConditionVertexId>
 
-let pathConditionVertices = Dictionary<Core.term, PathConditionVertex>()
+let pathConditionVertices = HashSet<Core.term>()
 let termsWithId = Dictionary<Core.term, uint<pathConditionVertexId>>()
 
 let collectPathCondition
     term
     (termsWithId: Dictionary<Core.term, uint<pathConditionVertexId>>)
-    (processedPathConditionVertices: Dictionary<Core.term, PathConditionVertex>)
+    (processedPathConditionVertices: HashSet<Core.term>)
     = // TODO: Support other operations
     let termsToVisit = Stack<Core.term> [| term |]
     let pathConditionDelta = ResizeArray<PathConditionVertex>()
@@ -382,14 +382,14 @@ let collectPathCondition
 
         let markAsVisited (vertexType: pathConditionVertexType) children =
             let newVertex = PathConditionVertex(getIdForTerm currentTerm, vertexType, children)
-            processedPathConditionVertices.Add(currentTerm, newVertex)
+            processedPathConditionVertices.Add currentTerm |> ignore
             pathConditionDelta.Add newVertex
 
         let handleTerm term (children: ResizeArray<_>) =
             children.Add(getIdForTerm term)
             termsToVisit.Push term
 
-        if not <| processedPathConditionVertices.ContainsKey currentTerm then
+        if not <| processedPathConditionVertices.Contains currentTerm then
             match currentTerm.term with
             | Nop -> markAsVisited pathConditionVertexType.Nop [||]
             | Concrete(_, _) -> markAsVisited pathConditionVertexType.Constant [||]
@@ -499,7 +499,7 @@ let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates process
                     PathConditionVertex(
                         id = getFirstFreePathConditionVertexId (),
                         pathConditionVertexType = pathConditionVertexType.PathConditionRoot,
-                        children = [| for p in pathCondition -> processedPathConditionVertices.[p].Id |]
+                        children = [| for p in pathCondition -> termsWithId.[p] |]
                     )
 
                 pathConditionDelta.Add pathConditionRoot
@@ -577,7 +577,7 @@ let dumpGameState fileForResultWithoutExtension (movedStateId: uint<stateId>) =
         collectGameState
             basicBlocks
             true
-            (Dictionary<Core.term, PathConditionVertex>())
+            (HashSet<Core.term>())
             (Dictionary<Core.term, uint<pathConditionVertexId>>())
 
     let statesInfoToDump = collectStatesInfoToDump basicBlocks
