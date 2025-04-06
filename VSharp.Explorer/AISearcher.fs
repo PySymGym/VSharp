@@ -213,7 +213,8 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
             aiAgentTrainingModelOptions: Option<AIAgentTrainingModelOptions>
         ) =
         let numOfVertexAttributes = 7
-        let numOfStateAttributes = 7
+        let numOfStateAttributes = 6
+        let numOfPathConditionVertexAttributes = 49
         let numOfHistoryEdgeAttributes = 2
 
 
@@ -248,9 +249,32 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                 let gameState = currentGameState.Value
                 let stateIds = Dictionary<uint<stateId>, int>()
                 let verticesIds = Dictionary<uint<basicBlockGlobalId>, int>()
+                let pathConditionVerticesIds = Dictionary<uint<pathConditionVertexId>, int>()
 
                 let networkInput =
                     let res = Dictionary<_, _>()
+
+                    let pathConditionVertices, numOfPcToPcEdges =
+                        let mutable numOfPcToPcEdges = 0
+
+                        let shape =
+                            [| int64 gameState.PathConditionVertices.Length
+                               numOfPathConditionVertexAttributes |]
+
+                        let attributes =
+                            Array.zeroCreate (
+                                gameState.PathConditionVertices.Length * numOfPathConditionVertexAttributes
+                            )
+
+                        for i in 0 .. gameState.PathConditionVertices.Length - 1 do
+                            let v = gameState.PathConditionVertices.[i]
+                            numOfPcToPcEdges <- numOfPcToPcEdges + v.Children.Length * 2
+                            pathConditionVerticesIds.Add(v.Id, i)
+                            let j = i * numOfPathConditionVertexAttributes
+                            attributes.[j + int v.Type] <- float32 1u
+
+                        OrtValue.CreateTensorValueFromMemory(attributes, shape), numOfPcToPcEdges
+
 
                     let gameVertices =
                         let shape = [| int64 gameState.GraphVertices.Length; numOfVertexAttributes |]
@@ -285,8 +309,6 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             stateIds.Add(v.Id, i)
                             let j = i * numOfStateAttributes
                             attributes.[j] <- float32 v.Position
-                            // TODO: Support path condition
-                            // attributes.[j + 1] <- float32 v.PathConditionSize
                             attributes.[j + 2] <- float32 v.VisitedAgainVertices
                             attributes.[j + 3] <- float32 v.VisitedNotCoveredVerticesInZone
                             attributes.[j + 4] <- float32 v.VisitedNotCoveredVerticesOutOfZone
@@ -294,6 +316,31 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             attributes.[j + 6] <- float32 v.InstructionsVisitedInCurrentBlock
 
                         OrtValue.CreateTensorValueFromMemory(attributes, shape), numOfParentOfEdges, numOfHistoryEdges
+
+                    let pcToPcEdgeIndex =
+                        let shapeOfIndex = [| 2L; numOfPcToPcEdges |]
+                        let index = Array.zeroCreate (2 * numOfPcToPcEdges)
+                        let mutable firstFreePositionOfIndex = 0
+
+                        for v in gameState.PathConditionVertices do
+                            for child in v.Children do
+                                // from vertex to child
+                                index.[firstFreePositionOfIndex] <- pathConditionVerticesIds.[v.Id]
+
+                                index.[firstFreePositionOfIndex + 2 * numOfPcToPcEdges] <-
+                                    pathConditionVerticesIds.[child]
+
+                                firstFreePositionOfIndex <- firstFreePositionOfIndex + 1
+                                // from child to vertex
+                                index.[firstFreePositionOfIndex] <- pathConditionVerticesIds.[child]
+
+                                index.[firstFreePositionOfIndex + 2 * numOfPcToPcEdges] <-
+                                    pathConditionVerticesIds.[v.Id]
+
+                                firstFreePositionOfIndex <- firstFreePositionOfIndex + 1
+
+                        OrtValue.CreateTensorValueFromMemory(index, shapeOfIndex)
+
 
                     let vertexToVertexEdgesIndex, vertexToVertexEdgesAttributes =
                         let shapeOfIndex = [| 2L; gameState.Map.Length |]
@@ -310,11 +357,13 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                         OrtValue.CreateTensorValueFromMemory(index, shapeOfIndex),
                         OrtValue.CreateTensorValueFromMemory(attributes, shapeOfAttributes)
 
-                    let historyEdgesIndex_vertexToState, historyEdgesAttributes, parentOfEdges =
+                    let historyEdgesIndex_vertexToState, historyEdgesAttributes, parentOfEdges, edgeIndex_pcToState =
                         let shapeOfParentOf = [| 2L; numOfParentOfEdges |]
                         let parentOf = Array.zeroCreate (2 * numOfParentOfEdges)
                         let shapeOfHistory = [| 2L; numOfHistoryEdges |]
                         let historyIndex_vertexToState = Array.zeroCreate (2 * numOfHistoryEdges)
+                        let shapeOfPcToState = [| 2L; gameState.States.Length |]
+                        let index_pcToState = Array.zeroCreate (2 * gameState.States.Length)
 
                         let shapeOfHistoryAttributes =
                             [| int64 numOfHistoryEdges; int64 numOfHistoryEdgeAttributes |]
@@ -323,6 +372,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                         let mutable firstFreePositionInParentsOf = 0
                         let mutable firstFreePositionInHistoryIndex = 0
                         let mutable firstFreePositionInHistoryAttributes = 0
+                        let mutable firstFreePositionInPcToState = 0
 
                         gameState.States
                         |> Array.iter (fun state ->
@@ -333,6 +383,14 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                                 parentOf[numOfParentOfEdges + j] <- int64 stateIds[children])
 
                             firstFreePositionInParentsOf <- firstFreePositionInParentsOf + state.Children.Length
+
+                            index_pcToState.[firstFreePositionInPcToState] <-
+                                int64 pathConditionVerticesIds[state.PathCondition.Id]
+
+                            index_pcToState.[firstFreePositionInPcToState + gameState.States.Length] <-
+                                int64 stateIds[state.Id]
+
+                            firstFreePositionInPcToState <- firstFreePositionInPcToState + 1
 
                             state.History
                             |> Array.iteri (fun i historyElem ->
@@ -352,7 +410,8 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
                         OrtValue.CreateTensorValueFromMemory(historyIndex_vertexToState, shapeOfHistory),
                         OrtValue.CreateTensorValueFromMemory(historyAttributes, shapeOfHistoryAttributes),
-                        OrtValue.CreateTensorValueFromMemory(parentOf, shapeOfParentOf)
+                        OrtValue.CreateTensorValueFromMemory(parentOf, shapeOfParentOf),
+                        OrtValue.CreateTensorValueFromMemory(index_pcToState, shapeOfPcToState)
 
                     let statePosition_stateToVertex, statePosition_vertexToState =
                         let data_stateToVertex = Array.zeroCreate (2 * gameState.States.Length)
@@ -380,6 +439,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
                     res.Add("game_vertex", gameVertices)
                     res.Add("state_vertex", states)
+                    res.Add("path_condition_vertex", pathConditionVertices)
 
                     res.Add("gamevertex_to_gamevertex_index", vertexToVertexEdgesIndex)
                     res.Add("gamevertex_to_gamevertex_type", vertexToVertexEdgesAttributes)
@@ -389,6 +449,9 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
                     res.Add("gamevertex_in_statevertex", statePosition_vertexToState)
                     res.Add("statevertex_parentof_statevertex", parentOfEdges)
+
+                    res.Add("pathconditionvertex_to_pathconditionvertex", pcToPcEdgeIndex)
+                    res.Add("pathconditionvertex_to_statevertex", edgeIndex_pcToState)
 
                     res
 
