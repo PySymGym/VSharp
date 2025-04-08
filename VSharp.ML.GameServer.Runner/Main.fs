@@ -231,6 +231,8 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
                     API.Reset()
                     HashMap.hashMap.Clear()
                     Serializer.pathConditionVertices.Clear()
+                    Serializer.resetPathConditionVertexIdCounter ()
+                    Serializer.termsWithId.Clear()
 
                     do!
                         sendResponse (

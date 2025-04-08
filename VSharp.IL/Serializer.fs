@@ -175,6 +175,7 @@ let calculateStateMetrics interproceduralGraphDistanceFrom (state: IGraphTrackab
             let mutable notVisitedBasicBlocksInZone = 0
             let mutable notTouchedBasicBlocksInZone = 0
             let basicBlocks = HashSet<_>()
+
             currentBasicBlock.OutgoingEdges.Values |> Seq.iter basicBlocks.UnionWith
 
             basicBlocks
@@ -348,41 +349,47 @@ let collectStatesInfoToDump (basicBlocks: ResizeArray<BasicBlock>) =
 
     statesInfoToDump
 
-let getFirstFreePathConditionVertexId =
+let getFirstFreePathConditionVertexId, resetPathConditionVertexIdCounter =
     let mutable count = 0u<pathConditionVertexId>
 
     fun () ->
         let res = count
         count <- count + 1u<pathConditionVertexId>
         res
+    , fun () -> count <- 0u<pathConditionVertexId>
 
-let pathConditionVertices = Dictionary<Core.term, PathConditionVertex>()
+let pathConditionVertices = HashSet<Core.term>()
+let termsWithId = Dictionary<Core.term, uint<pathConditionVertexId>>()
 
-let collectPathCondition term = // TODO: Support other operations
-    let termsToVisit =
-        Stack<Core.term * uint<pathConditionVertexId>> [| (term, getFirstFreePathConditionVertexId ()) |]
-
+let collectPathCondition
+    term
+    (termsWithId: Dictionary<Core.term, uint<pathConditionVertexId>>)
+    (processedPathConditionVertices: HashSet<Core.term>)
+    = // TODO: Support other operations
+    let termsToVisit = Stack<Core.term> [| term |]
     let pathConditionDelta = ResizeArray<PathConditionVertex>()
 
+    let getIdForTerm term =
+        if termsWithId.ContainsKey term then
+            termsWithId.[term]
+        else
+            let newId = getFirstFreePathConditionVertexId ()
+            termsWithId.Add(term, newId)
+            newId
+
+    let handleChild term (children: ResizeArray<_>) =
+        children.Add(getIdForTerm term)
+        termsToVisit.Push term
+
     while termsToVisit.Count > 0 do
-        let currentTerm, currentTermId = termsToVisit.Pop()
+        let currentTerm = termsToVisit.Pop()
 
         let markAsVisited (vertexType: pathConditionVertexType) children =
-            let newVertex = PathConditionVertex(currentTermId, vertexType, children)
-            pathConditionVertices.Add(currentTerm, newVertex)
+            let newVertex = PathConditionVertex(getIdForTerm currentTerm, vertexType, children)
+            processedPathConditionVertices.Add currentTerm |> ignore
             pathConditionDelta.Add newVertex
 
-        let handleTerm term (children: ResizeArray<_>) =
-            let termId =
-                if not <| pathConditionVertices.ContainsKey term then
-                    getFirstFreePathConditionVertexId ()
-                else
-                    pathConditionVertices.[term].Id
-
-            children.Add termId
-            termsToVisit.Push((term, termId))
-
-        if not <| pathConditionVertices.ContainsKey currentTerm then
+        if not <| processedPathConditionVertices.Contains currentTerm then
             match currentTerm.term with
             | Nop -> markAsVisited pathConditionVertexType.Nop [||]
             | Concrete(_, _) -> markAsVisited pathConditionVertexType.Constant [||]
@@ -391,7 +398,7 @@ let collectPathCondition term = // TODO: Support other operations
                 let children = ResizeArray<uint<pathConditionVertexId>>()
 
                 for t in termList do
-                    handleTerm t children
+                    handleChild t children
 
                 let children = children.ToArray()
 
@@ -443,30 +450,30 @@ let collectPathCondition term = // TODO: Support other operations
                 let children = ResizeArray<uint<pathConditionVertexId>>()
 
                 for _, t in PersistentDict.toSeq fields do
-                    handleTerm t children
+                    handleChild t children
 
                 markAsVisited pathConditionVertexType.Struct (children.ToArray())
             | HeapRef(_, _) -> markAsVisited pathConditionVertexType.HeapRef [||]
             | Ref(_) -> markAsVisited pathConditionVertexType.Ref [||]
             | Ptr(_, _, t) ->
                 let children = ResizeArray<uint<pathConditionVertexId>> [||]
-                handleTerm t children
+                handleChild t children
                 markAsVisited pathConditionVertexType.Ptr (children.ToArray())
             | Slice(t, listOfTuples) ->
                 let children = ResizeArray<uint<pathConditionVertexId>> [||]
-                handleTerm t children
+                handleChild t children
 
                 for t1, t2, t3, _ in listOfTuples do
-                    handleTerm t1 children
-                    handleTerm t2 children
-                    handleTerm t3 children
+                    handleChild t1 children
+                    handleChild t2 children
+                    handleChild t3 children
 
                 markAsVisited pathConditionVertexType.Slice (children.ToArray())
             | Ite(_) -> markAsVisited pathConditionVertexType.Ite [||]
 
     pathConditionDelta
 
-let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates =
+let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates processedPathConditionVertices termsWithId =
 
     let vertices = ResizeArray<_>()
     let allStates = HashSet<_>()
@@ -486,13 +493,13 @@ let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates =
                 let pathCondition = s.PathCondition |> PC.toSeq
 
                 for term in pathCondition do
-                    pathConditionDelta.AddRange(collectPathCondition term)
+                    pathConditionDelta.AddRange(collectPathCondition term termsWithId processedPathConditionVertices)
 
                 let pathConditionRoot =
                     PathConditionVertex(
                         id = getFirstFreePathConditionVertexId (),
                         pathConditionVertexType = pathConditionVertexType.PathConditionRoot,
-                        children = [| for p in pathCondition -> pathConditionVertices.[p].Id |]
+                        children = [| for p in pathCondition -> termsWithId.[p] |]
                     )
 
                 pathConditionDelta.Add pathConditionRoot
@@ -556,7 +563,7 @@ let collectGameStateDelta () =
             let added = basicBlocks.Add(basicBlock)
             ()
 
-    collectGameState (ResizeArray basicBlocks) false
+    collectGameState (ResizeArray basicBlocks) false pathConditionVertices termsWithId
 
 let dumpGameState fileForResultWithoutExtension (movedStateId: uint<stateId>) =
     let basicBlocks = ResizeArray<_>()
@@ -566,7 +573,9 @@ let dumpGameState fileForResultWithoutExtension (movedStateId: uint<stateId>) =
             basicBlock.IsGoal <- method.Key.InCoverageZone
             basicBlocks.Add(basicBlock)
 
-    let gameState = collectGameState basicBlocks true
+    let gameState =
+        collectGameState basicBlocks true (HashSet<Core.term>()) (Dictionary<Core.term, uint<pathConditionVertexId>>())
+
     let statesInfoToDump = collectStatesInfoToDump basicBlocks
     let gameStateJson = JsonSerializer.Serialize gameState
     let statesInfoJson = JsonSerializer.Serialize statesInfoToDump
