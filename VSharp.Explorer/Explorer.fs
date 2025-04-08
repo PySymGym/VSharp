@@ -12,7 +12,6 @@ open VSharp.Core
 open VSharp.Interpreter.IL
 open CilState
 open VSharp.Explorer
-open VSharp.ML.GameServer.Messages
 open VSharp.Solver
 open VSharp.IL.Serializer
 
@@ -44,12 +43,14 @@ type private SVMExplorer(explorationOptions: ExplorationOptions, statistics: SVM
     let options = explorationOptions.svmOptions
 
     let folderToStoreSerializationResult =
-        match options.aiAgentTrainingOptions with
-        | None -> ""
-        | Some options ->
+        match options.aiOptions with
+        | Some(DatasetGenerator aiOptions) ->
+            let mapName = aiOptions.mapName
+
             getFolderToStoreSerializationResult
                 (Path.GetDirectoryName explorationOptions.outputDirectory.FullName)
-                options.mapName
+                mapName
+        | _ -> ""
 
     let hasTimeout = explorationOptions.timeout.TotalMilliseconds > 0
 
@@ -111,17 +112,27 @@ type private SVMExplorer(explorationOptions: ExplorationOptions, statistics: SVM
 
         match mode with
         | AIMode ->
-            match options.aiAgentTrainingOptions with
+            let useGPU = options.useGPU
+            let optimize = options.optimize
+
+            match options.aiOptions with
             | Some aiOptions ->
-                match aiOptions.oracle with
-                | Some oracle -> AISearcher(oracle, options.aiAgentTrainingOptions) :> IForwardSearcher
-                | None -> failwith "Empty oracle for AI searcher."
+                match aiOptions with
+                | Training aiAgentTrainingOptions ->
+                    match aiAgentTrainingOptions with
+                    | SendEachStep aiAgentTrainingEachStepOptions ->
+                        match aiAgentTrainingEachStepOptions.aiAgentTrainingOptions.oracle with
+                        | Some oracle -> AISearcher(oracle, Some aiAgentTrainingOptions) :> IForwardSearcher
+                        | None -> failwith "Empty oracle for AI searcher training (send each step mode)."
+                    | SendModel aiAgentTrainingModelOptions ->
+                        match options.pathToModel with
+                        | Some path ->
+                            AISearcher(path, useGPU, optimize, Some aiAgentTrainingModelOptions) :> IForwardSearcher
+                        | None -> failwith "Empty model for AI searcher training (send model mode)."
+                | DatasetGenerator aiOptions -> mkForwardSearcher aiOptions.defaultSearchStrategy
             | None ->
                 match options.pathToModel with
-                | Some s ->
-                    let useGPU = options.useGPU.IsSome && options.useGPU.Value
-                    let optimize = options.optimize.IsSome && options.optimize.Value
-                    AISearcher(s, useGPU, optimize)
+                | Some s -> AISearcher(s, useGPU, optimize, None)
                 | None -> failwith "Empty model for AI searcher."
         | BFSMode -> BFSSearcher() :> IForwardSearcher
         | DFSMode -> DFSSearcher() :> IForwardSearcher
@@ -477,10 +488,12 @@ type private SVMExplorer(explorationOptions: ExplorationOptions, statistics: SVM
             match action with
             | GoFront s ->
                 try
-                    if
-                        options.aiAgentTrainingOptions.IsSome
-                        && options.aiAgentTrainingOptions.Value.serializeSteps
-                    then
+                    let needToSerialize =
+                        match options.aiOptions with
+                        | Some(DatasetGenerator _) -> true
+                        | _ -> false
+
+                    if needToSerialize then
                         dumpGameState
                             (Path.Combine(folderToStoreSerializationResult, string firstFreeEpisodeNumber))
                             s.internalId

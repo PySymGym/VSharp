@@ -93,10 +93,10 @@ internal static class Benchmarks
             stopOnCoverageAchieved: -1,
             randomSeed: randomSeed,
             stepsLimit: stepsLimit,
-            aiAgentTrainingOptions: null,
+            aiOptions: null,
             pathToModel: null,
-            useGPU: null,
-            optimize: null
+            useGPU: false,
+            optimize: false
         );
 
         var fuzzerOptions = new FuzzerOptions(
