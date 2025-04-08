@@ -136,7 +136,6 @@ namespace VSharp.Test
         private readonly bool _useGPU;
         private readonly bool _optimize;
 
-
         public TestSvmAttribute(
             int expectedCoverage = -1,
             uint recThresholdForTest = 1u,
@@ -176,10 +175,10 @@ namespace VSharp.Test
             _fuzzerIsolation = fuzzerIsolation;
             _explorationMode = explorationMode;
             _randomSeed = randomSeed;
+            _stepsLimit = stepsLimit;
             _pathToModel = pathToModel;
             _useGPU = useGPU;
             _optimize = optimize;
-            _stepsLimit = stepsLimit;
         }
 
         public TestCommand Wrap(TestCommand command)
@@ -200,10 +199,10 @@ namespace VSharp.Test
                 _explorationMode,
                 _randomSeed,
                 _stepsLimit,
+                _hasExternMocking,
                 _pathToModel,
                 _useGPU,
-                _optimize,
-                _hasExternMocking
+                _optimize
             );
         }
 
@@ -263,10 +262,10 @@ namespace VSharp.Test
                 ExplorationMode explorationMode,
                 int randomSeed,
                 uint stepsLimit,
+                bool hasExternMocking,
                 string pathToModel,
                 bool useGPU,
-                bool optimize,
-                bool hasExternMocking) : base(innerCommand)
+                bool optimize) : base(innerCommand)
             {
                 _baseCoverageZone = coverageZone;
                 _baseSearchStrat = TestContext.Parameters[SearchStrategyParameterName] == null ?
@@ -478,7 +477,7 @@ namespace VSharp.Test
                         stopOnCoverageAchieved: _expectedCoverage ?? -1,
                         randomSeed: _randomSeed,
                         stepsLimit: _stepsLimit,
-                        aiAgentTrainingOptions: null,
+                        aiOptions: null,
                         pathToModel: _pathToModel,
                         useGPU: _useGPU,
                         optimize: _optimize

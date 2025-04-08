@@ -1,4 +1,7 @@
+open System
 open System.IO
+open System.Text.Json
+open System.Net.Sockets
 open System.Reflection
 open Argu
 open Microsoft.FSharp.Core
@@ -16,7 +19,6 @@ open VSharp.IL
 open VSharp.ML.GameServer.Messages
 open VSharp.Runner
 
-
 [<Struct>]
 type ExplorationResult =
     val ActualCoverage: uint<percent>
@@ -33,6 +35,10 @@ type ExplorationResult =
 type Mode =
     | Server = 0
     | Generator = 1
+    | SendModel = 2
+
+let TIMEOUT_FOR_TRAINING = 15 * 60
+let SOLVER_TIMEOUT_FOR_TRAINING = 2
 
 type CliArguments =
     | [<Unique>] Port of int
@@ -41,8 +47,15 @@ type CliArguments =
     | [<Unique; Mandatory>] Mode of Mode
     | [<Unique>] OutFolder of string
     | [<Unique>] StepsToSerialize of uint
-    | [<Unique>] UseGPU
-    | [<Unique>] Optimize
+    | [<Unique>] Model of string
+    | [<Unique>] StepsToPlay of uint<step>
+    | [<Unique>] DefaultSearcher of string
+    | [<Unique>] StepsToStart of uint<step>
+    | [<Unique>] AssemblyFullName of string
+    | [<Unique>] NameOfObjectToCover of string
+    | [<Unique>] MapName of string
+    | [<Unique>] UseGPU of bool
+    | [<Unique>] Optimize of bool
 
     interface IArgParserTemplate with
         member s.Usage =
@@ -55,14 +68,22 @@ type CliArguments =
                 "Mode to run application. Server --- to train network, Generator --- to generate data for training."
             | OutFolder _ -> "Folder to store generated data."
             | StepsToSerialize _ -> "Maximal number of steps for each method to serialize."
-            | UseGPU -> "Specifies whether the ONNX execution session should use a CUDA-enabled GPU."
-            | Optimize ->
+            | Model _ -> """Path to ONNX model (use it for training in mode "SendModel")"""
+            | StepsToPlay _ -> """Steps required to play (after `StepsToStart` steps)"""
+            | DefaultSearcher _ -> """Defines the default searcher algorithm (BFS | DFS)"""
+            | StepsToStart _ -> """Steps required to start the game"""
+            | AssemblyFullName _ -> """Path to the DLL that contains the game map implementation"""
+            | NameOfObjectToCover _ -> """The name of the object that needs to be covered"""
+            | MapName _ -> """The name of the map used in the game"""
+            | UseGPU _ -> "Specifies whether the ONNX execution session should use a CUDA-enabled GPU."
+            | Optimize _ ->
                 "Enabling options like parallel execution and various graph transformations to enhance performance of ONNX."
 
 let mutable inTrainMode = true
 
 let explore (gameMap: GameMap) options =
     let assembly = RunnerProgram.TryLoadAssembly <| FileInfo gameMap.AssemblyFullName
+
     let method = RunnerProgram.ResolveMethod(assembly, gameMap.NameOfObjectToCover)
     let statistics = TestGenerator.Cover(method, options)
 
@@ -91,7 +112,6 @@ let explore (gameMap: GameMap) options =
         statistics.ErrorsCount * 1u<error>,
         statistics.StepsCount * 1u<step>
     )
-
 
 let loadGameMaps (datasetDescriptionFilePath: string) =
     let jsonString = File.ReadAllText datasetDescriptionFilePath
@@ -181,25 +201,28 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
                     let stepsToPlay = gameMap.StepsToPlay
 
                     let aiTrainingOptions =
-                        { stepsToSwitchToAI = stepsToStart
+                        { aiBaseOptions =
+                            { defaultSearchStrategy =
+                                match gameMap.DefaultSearcher with
+                                | searcher.BFS -> BFSMode
+                                | searcher.DFS -> DFSMode
+                                | x -> failwithf $"Unexpected searcher {x}. Use DFS or BFS for now."
+                              mapName = gameMap.MapName }
+                          stepsToSwitchToAI = stepsToStart
                           stepsToPlay = stepsToPlay
-                          defaultSearchStrategy =
-                            match gameMap.DefaultSearcher with
-                            | searcher.BFS -> BFSMode
-                            | searcher.DFS -> DFSMode
-                            | x -> failwithf $"Unexpected searcher {x}. Use DFS or BFS for now."
-                          serializeSteps = false
-                          mapName = gameMap.MapName
                           oracle = Some oracle }
+
+                    let aiOptions: AIOptions =
+                        (Training(SendEachStep { aiAgentTrainingOptions = aiTrainingOptions }))
 
                     let options =
                         VSharpOptions(
-                            timeout = 15 * 60,
+                            timeout = TIMEOUT_FOR_TRAINING,
                             outputDirectory = outputDirectory,
                             searchStrategy = SearchStrategy.AI,
-                            aiAgentTrainingOptions = aiTrainingOptions,
+                            aiOptions = aiOptions,
                             stepsLimit = uint (stepsToPlay + stepsToStart),
-                            solverTimeout = 2
+                            solverTimeout = SOLVER_TIMEOUT_FOR_TRAINING
                         )
 
                     let explorationResult = explore gameMap options
@@ -231,6 +254,9 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
 let app port outputDirectory : WebPart =
     choose [ path "/gameServer" >=> handShake (ws port outputDirectory) ]
 
+let serializeExplorationResult (explorationResult: ExplorationResult) =
+    $"{explorationResult.ActualCoverage} {explorationResult.TestsCount} {explorationResult.StepsCount} {explorationResult.ErrorsCount}"
+
 let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArray<GameMap>) stepsToSerialize =
     for map in maps do
         if map.StepsToStart = 0u<step> then
@@ -246,13 +272,9 @@ let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArra
                     map.MapName
                 )
 
-            let aiTrainingOptions =
-                { stepsToSwitchToAI = 0u<step>
-                  stepsToPlay = 0u<step>
-                  defaultSearchStrategy = searchMode.BFSMode
-                  serializeSteps = true
-                  mapName = map.MapName
-                  oracle = None }
+            let aiBaseOptions =
+                { defaultSearchStrategy = BFSMode
+                  mapName = map.MapName }
 
             let options =
                 VSharpOptions(
@@ -261,7 +283,7 @@ let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArra
                     searchStrategy = SearchStrategy.ExecutionTreeContributedCoverage,
                     stepsLimit = stepsToSerialize,
                     solverTimeout = 2,
-                    aiAgentTrainingOptions = aiTrainingOptions
+                    aiOptions = DatasetGenerator aiBaseOptions
                 )
 
             let folderForResults =
@@ -274,10 +296,7 @@ let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArra
 
             let explorationResult = explore map options
 
-            File.WriteAllText(
-                Path.Join(folderForResults, "result"),
-                $"{explorationResult.ActualCoverage} {explorationResult.TestsCount} {explorationResult.StepsCount} {explorationResult.ErrorsCount}"
-            )
+            File.WriteAllText(Path.Join(folderForResults, "result"), serializeExplorationResult explorationResult)
 
             printfn
                 $"Generation for {map.MapName} finished with coverage {explorationResult.ActualCoverage}, tests {explorationResult.TestsCount}, steps {explorationResult.StepsCount},errors {explorationResult.ErrorsCount}."
@@ -286,49 +305,110 @@ let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArra
             API.Reset()
             HashMap.hashMap.Clear()
 
+let runTrainingSendModelMode
+    outputDirectory
+    (gameMap: GameMap)
+    (pathToModel: string)
+    (useGPU: bool)
+    (optimize: bool)
+    (port: int)
+    =
+    printfn $"Run infer on {gameMap.MapName} have started."
+    let stepsToStart = gameMap.StepsToStart
+    let stepsToPlay = gameMap.StepsToPlay
+
+    let aiTrainingOptions =
+        { aiBaseOptions =
+            { defaultSearchStrategy =
+                match gameMap.DefaultSearcher with
+                | searcher.BFS -> BFSMode
+                | searcher.DFS -> DFSMode
+                | x -> failwithf $"Unexpected searcher {x}. Use DFS or BFS for now."
+
+              mapName = gameMap.MapName }
+          stepsToSwitchToAI = stepsToStart
+          stepsToPlay = stepsToPlay
+          oracle = None }
+
+    let steps = ResizeArray()
+    let stepSaver (aiGameStep: AIGameStep) = steps.Add aiGameStep
+
+    let aiOptions: AIOptions =
+        Training(
+            SendModel
+                { aiAgentTrainingOptions = aiTrainingOptions
+                  outputDirectory = outputDirectory
+                  stepSaver = stepSaver }
+        )
+
+    let options =
+        VSharpOptions(
+            timeout = TIMEOUT_FOR_TRAINING,
+            outputDirectory = outputDirectory,
+            searchStrategy = SearchStrategy.AI,
+            solverTimeout = SOLVER_TIMEOUT_FOR_TRAINING,
+            stepsLimit = uint (stepsToPlay + stepsToStart),
+            aiOptions = aiOptions,
+            pathToModel = pathToModel,
+            useGPU = useGPU,
+            optimize = optimize
+        )
+
+    let explorationResult = explore gameMap options
+
+    File.WriteAllText(
+        Path.Join(outputDirectory, gameMap.MapName + "result"),
+        serializeExplorationResult explorationResult
+    )
+
+    printfn
+        $"Running for {gameMap.MapName} finished with coverage {explorationResult.ActualCoverage}, tests {explorationResult.TestsCount}, steps {explorationResult.StepsCount},errors {explorationResult.ErrorsCount}."
+
+    let stream =
+        let host = "localhost" // TODO: working within a local network
+        let client = new TcpClient()
+        client.Connect(host, port)
+        client.SendBufferSize <- 4096
+        client.GetStream()
+
+    let needToSendSteps =
+        let buffer = Array.zeroCreate<byte> 1
+        let bytesRead = stream.Read(buffer, 0, 1)
+
+        if bytesRead = 0 then
+            failwith "Connection is closed?!"
+
+        stream.Close()
+        buffer.[0] <> byte 0
+
+    if needToSendSteps then
+        File.WriteAllText(Path.Join(outputDirectory, gameMap.MapName + "_steps"), JsonSerializer.Serialize steps)
+
 [<EntryPoint>]
 let main args =
     let parser =
         ArgumentParser.Create<CliArguments>(programName = "VSharp.ML.GameServer.Runner.exe")
 
     let args = parser.Parse args
-
     let mode = args.GetResult <@ Mode @>
 
-    let port =
-        match args.TryGetResult <@ Port @> with
-        | Some port -> port
-        | None -> 8100
+    let port = args.GetResult(Port, defaultValue = 8100)
 
-    let datasetBasePath =
-        match args.TryGetResult <@ DatasetBasePath @> with
-        | Some path -> path
-        | None -> ""
+    let outputDirectory =
+        args.GetResult(OutFolder, defaultValue = Path.Combine(Directory.GetCurrentDirectory(), string port))
 
-    let datasetDescription =
-        match args.TryGetResult <@ DatasetDescription @> with
-        | Some path -> path
-        | None -> ""
+    let cleanOutputDirectory () =
+        if Directory.Exists outputDirectory then
+            Directory.Delete(outputDirectory, true)
 
-    let stepsToSerialize =
-        match args.TryGetResult <@ StepsToSerialize @> with
-        | Some steps -> steps
-        | None -> 500u
+        Directory.CreateDirectory outputDirectory
 
-    let useGPU = (args.TryGetResult <@ UseGPU @>).IsSome
-
-    let optimize = (args.TryGetResult <@ Optimize @>).IsSome
-
-    let outputDirectory = Path.Combine(Directory.GetCurrentDirectory(), string port)
-
-    if Directory.Exists outputDirectory then
-        Directory.Delete(outputDirectory, true)
-
-    let testsDirInfo = Directory.CreateDirectory outputDirectory
     printfn $"outputDir: {outputDirectory}"
 
     match mode with
     | Mode.Server ->
+        let _ = cleanOutputDirectory ()
+
         try
             startWebServer
                 { defaultConfig with
@@ -338,7 +418,46 @@ let main args =
         with e ->
             printfn $"Failed on port {port}"
             printfn $"{e.Message}"
+    | Mode.SendModel ->
+        let model = args.GetResult(Model, defaultValue = "models/model.onnx")
+
+        let stepsToPlay = args.GetResult <@ StepsToPlay @>
+
+        let defaultSearcher =
+            let s = args.GetResult <@ DefaultSearcher @>
+            let upperedS = String.map System.Char.ToUpper s
+
+            match upperedS with
+            | "BFS" -> searcher.BFS
+            | "DFS" -> searcher.DFS
+            | _ -> failwith "Use BFS or DFS as a default searcher"
+
+        let stepsToStart = args.GetResult <@ StepsToStart @>
+        let assemblyFullName = args.GetResult <@ AssemblyFullName @>
+        let nameOfObjectToCover = args.GetResult <@ NameOfObjectToCover @>
+        let mapName = args.GetResult <@ MapName @>
+
+        let gameMap =
+            GameMap(
+                stepsToPlay = stepsToPlay,
+                stepsToStart = stepsToStart,
+                assemblyFullName = assemblyFullName,
+                defaultSearcher = defaultSearcher,
+                nameOfObjectToCover = nameOfObjectToCover,
+                mapName = mapName
+            )
+
+        let useGPU = args.GetResult(UseGPU, defaultValue = false)
+        let optimize = args.GetResult(Optimize, defaultValue = false)
+
+        runTrainingSendModelMode outputDirectory gameMap model useGPU optimize port
     | Mode.Generator ->
+        let datasetDescription = args.GetResult <@ DatasetDescription @>
+        let datasetBasePath = args.GetResult <@ DatasetBasePath @>
+        let stepsToSerialize = args.GetResult(StepsToSerialize, defaultValue = 500u)
+
+
+        let _ = cleanOutputDirectory ()
         let maps = loadGameMaps datasetDescription
         generateDataForPretraining outputDirectory datasetBasePath maps stepsToSerialize
     | x -> failwithf $"Unexpected mode {x}."

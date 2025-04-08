@@ -3,6 +3,8 @@ namespace VSharp.Explorer
 open System.Diagnostics
 open System.IO
 open VSharp.ML.GameServer.Messages
+open System.Net.Sockets
+open Microsoft.ML.OnnxRuntime
 
 type searchMode =
     | DFSMode
@@ -27,20 +29,17 @@ type explorationMode =
 type fuzzerIsolation = | Process
 
 type FuzzerOptions =
-    {
-        isolation: fuzzerIsolation
-        coverageZone: coverageZone
-    }
+    { isolation: fuzzerIsolation
+      coverageZone: coverageZone }
 
 [<Struct>]
 type Oracle =
     val Predict: GameState -> uint<stateId>
     val Feedback: Feedback -> unit
+
     new(predict, feedback) =
-        {
-            Predict = predict
-            Feedback = feedback
-        }
+        { Predict = predict
+          Feedback = feedback }
 
 /// <summary>
 /// Options used in AI agent training.
@@ -51,34 +50,62 @@ type Oracle =
 /// <param name="serializeSteps">Determine whether steps should be serialized.</param>
 /// <param name="mapName">Name of map to play.</param>
 /// <param name="mapName">Name of map to play.</param>
+
+[<Struct>]
+type AIGameStep =
+    interface IRawOutgoingMessageBody
+    val GameState: GameState
+    val Output: seq<array<float32>>
+
+    new(gameState, output) =
+        { GameState = gameState
+          Output = output }
+
+
+type AIBaseOptions =
+    { defaultSearchStrategy: searchMode
+      mapName: string }
+
 type AIAgentTrainingOptions =
-    {
-        stepsToSwitchToAI: uint<step>
-        stepsToPlay: uint<step>
-        defaultSearchStrategy: searchMode
-        serializeSteps: bool
-        mapName: string
-        oracle: Option<Oracle>
-    }
+    { aiBaseOptions: AIBaseOptions
+      stepsToSwitchToAI: uint<step>
+      stepsToPlay: uint<step>
+      oracle: option<Oracle> }
+
+type AIAgentTrainingEachStepOptions =
+    { aiAgentTrainingOptions: AIAgentTrainingOptions }
+
+
+type AIAgentTrainingModelOptions =
+    { aiAgentTrainingOptions: AIAgentTrainingOptions
+      outputDirectory: string
+      stepSaver: AIGameStep -> Unit }
+
+
+type AIAgentTrainingMode =
+    | SendEachStep of AIAgentTrainingEachStepOptions
+    | SendModel of AIAgentTrainingModelOptions
+
+type AIOptions =
+    | Training of AIAgentTrainingMode
+    | DatasetGenerator of AIBaseOptions
 
 type SVMOptions =
-    {
-        explorationMode: explorationMode
-        recThreshold: uint
-        solverTimeout: int
-        visualize: bool
-        releaseBranches: bool
-        maxBufferSize: int
-        prettyChars: bool // If true, 33 <= char <= 126, otherwise any char
-        checkAttributes: bool
-        stopOnCoverageAchieved: int
-        randomSeed: int
-        stepsLimit: uint
-        aiAgentTrainingOptions: Option<AIAgentTrainingOptions>
-        pathToModel: Option<string>
-        useGPU: Option<bool>
-        optimize: Option<bool>
-    }
+    { explorationMode: explorationMode
+      recThreshold: uint
+      solverTimeout: int
+      visualize: bool
+      releaseBranches: bool
+      maxBufferSize: int
+      prettyChars: bool // If true, 33 <= char <= 126, otherwise any char
+      checkAttributes: bool
+      stopOnCoverageAchieved: int
+      randomSeed: int
+      stepsLimit: uint
+      aiOptions: Option<AIOptions>
+      pathToModel: Option<string>
+      useGPU: bool
+      optimize: bool }
 
 type explorationModeOptions =
     | Fuzzing of FuzzerOptions
@@ -86,29 +113,27 @@ type explorationModeOptions =
     | Combined of SVMOptions * FuzzerOptions
 
 type ExplorationOptions =
-    {
-        timeout: System.TimeSpan
-        outputDirectory: DirectoryInfo
-        explorationModeOptions: explorationModeOptions
-    }
+    { timeout: System.TimeSpan
+      outputDirectory: DirectoryInfo
+      explorationModeOptions: explorationModeOptions }
 
     member this.fuzzerOptions =
         match this.explorationModeOptions with
         | Fuzzing x -> x
-        | Combined (_, x) -> x
+        | Combined(_, x) -> x
         | _ -> failwith ""
 
     member this.svmOptions =
         match this.explorationModeOptions with
         | SVM x -> x
-        | Combined (x, _) -> x
+        | Combined(x, _) -> x
         | _ -> failwith ""
 
     member this.coverageZone =
         match this.explorationModeOptions with
         | SVM x ->
             match x.explorationMode with
-            | TestCoverageMode (coverageZone, _) -> coverageZone
+            | TestCoverageMode(coverageZone, _) -> coverageZone
             | StackTraceReproductionMode _ -> failwith ""
-        | Combined (_, x) -> x.coverageZone
+        | Combined(_, x) -> x.coverageZone
         | Fuzzing x -> x.coverageZone
