@@ -123,7 +123,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
             Application.applicationGraphDelta.Clear()
 
-            if aiMode <> Runner && stepsToPlay = stepsPlayed then //TODO FIX IT CAREFULLY!!!!
+            if aiMode <> Runner && stepsToPlay = stepsPlayed then
                 None
             else
                 let toPredict =
