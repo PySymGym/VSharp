@@ -94,6 +94,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
         | Some(SendEachStep _) -> TrainingSendEachStep
         | Some(SendModel _) -> TrainingSendModel
         | None -> Runner
+
     let pick selector =
         if useDefaultSearcher then
             defaultSearcherSteps <- defaultSearcherSteps + 1u<step>
@@ -122,7 +123,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
             Application.applicationGraphDelta.Clear()
 
-            if stepsToPlay = stepsPlayed then
+            if aiMode <> Runner && stepsToPlay = stepsPlayed then
                 None
             else
                 let toPredict =
@@ -136,6 +137,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                     | Runner -> gameState.Value
 
                 let stateId = oracle.Predict toPredict
+
                 afterFirstAIPeek <- true
                 let state = availableStates |> Seq.tryFind (fun s -> s.internalId = stateId)
                 lastCollectedStatistics <- statistics
@@ -147,6 +149,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                     incorrectPredictedStateId <- true
                     oracle.Feedback(Feedback.IncorrectPredictedStateId stateId)
                     None
+
     static member updateGameState (delta: GameState) (gameState: Option<GameState>) =
         match gameState with
         | None -> Some delta
@@ -199,11 +202,11 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
             Some
             <| GameState(vertices.ToArray(), states, pathConditionVertices.ToArray(), edges.ToArray())
 
-    static member convertOutputToJson (output: IDisposableReadOnlyCollection<OrtValue>) =
+    static member convertOutputToJson(output: IDisposableReadOnlyCollection<OrtValue>) =
         seq { 0 .. output.Count - 1 }
         |> Seq.map (fun i -> output[i].GetTensorDataAsSpan<float32>().ToArray())
 
-    
+
 
     new
         (
@@ -309,11 +312,11 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             stateIds.Add(v.Id, i)
                             let j = i * numOfStateAttributes
                             attributes.[j] <- float32 v.Position
-                            attributes.[j + 2] <- float32 v.VisitedAgainVertices
-                            attributes.[j + 3] <- float32 v.VisitedNotCoveredVerticesInZone
-                            attributes.[j + 4] <- float32 v.VisitedNotCoveredVerticesOutOfZone
-                            attributes.[j + 5] <- float32 v.StepWhenMovedLastTime
-                            attributes.[j + 6] <- float32 v.InstructionsVisitedInCurrentBlock
+                            attributes.[j + 1] <- float32 v.VisitedAgainVertices
+                            attributes.[j + 2] <- float32 v.VisitedNotCoveredVerticesInZone
+                            attributes.[j + 3] <- float32 v.VisitedNotCoveredVerticesOutOfZone
+                            attributes.[j + 4] <- float32 v.StepWhenMovedLastTime
+                            attributes.[j + 5] <- float32 v.InstructionsVisitedInCurrentBlock
 
                         OrtValue.CreateTensorValueFromMemory(attributes, shape), numOfParentOfEdges, numOfHistoryEdges
 
@@ -325,17 +328,17 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                         for v in gameState.PathConditionVertices do
                             for child in v.Children do
                                 // from vertex to child
-                                index.[firstFreePositionOfIndex] <- pathConditionVerticesIds.[v.Id]
+                                index.[firstFreePositionOfIndex] <- int64 pathConditionVerticesIds.[v.Id]
 
-                                index.[firstFreePositionOfIndex + 2 * numOfPcToPcEdges] <-
-                                    pathConditionVerticesIds.[child]
+                                index.[firstFreePositionOfIndex + numOfPcToPcEdges] <-
+                                    int64 pathConditionVerticesIds.[child]
 
                                 firstFreePositionOfIndex <- firstFreePositionOfIndex + 1
                                 // from child to vertex
-                                index.[firstFreePositionOfIndex] <- pathConditionVerticesIds.[child]
+                                index.[firstFreePositionOfIndex] <- int64 pathConditionVerticesIds.[child]
 
-                                index.[firstFreePositionOfIndex + 2 * numOfPcToPcEdges] <-
-                                    pathConditionVerticesIds.[v.Id]
+                                index.[firstFreePositionOfIndex + numOfPcToPcEdges] <-
+                                    int64 pathConditionVerticesIds.[v.Id]
 
                                 firstFreePositionOfIndex <- firstFreePositionOfIndex + 1
 
