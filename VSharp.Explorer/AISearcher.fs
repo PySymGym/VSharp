@@ -360,13 +360,20 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                         OrtValue.CreateTensorValueFromMemory(index, shapeOfIndex),
                         OrtValue.CreateTensorValueFromMemory(attributes, shapeOfAttributes)
 
-                    let historyEdgesIndex_vertexToState, historyEdgesAttributes, parentOfEdges, edgeIndex_pcToState =
+                    let (historyEdgesIndex_vertexToState,
+                         historyEdgesIndex_stateToVertex,
+                         historyEdgesAttributes,
+                         parentOfEdges,
+                         edgeIndex_pcToState,
+                         edgeIndex_stateToPc) =
                         let shapeOfParentOf = [| 2L; numOfParentOfEdges |]
                         let parentOf = Array.zeroCreate (2 * numOfParentOfEdges)
                         let shapeOfHistory = [| 2L; numOfHistoryEdges |]
                         let historyIndex_vertexToState = Array.zeroCreate (2 * numOfHistoryEdges)
+                        let historyIndex_stateToVertex = Array.zeroCreate (2 * numOfHistoryEdges)
                         let shapeOfPcToState = [| 2L; gameState.States.Length |]
                         let index_pcToState = Array.zeroCreate (2 * gameState.States.Length)
+                        let index_stateToPc = Array.zeroCreate (2 * gameState.States.Length)
 
                         let shapeOfHistoryAttributes =
                             [| int64 numOfHistoryEdges; int64 numOfHistoryEdgeAttributes |]
@@ -393,6 +400,12 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             index_pcToState.[firstFreePositionInPcToState + gameState.States.Length] <-
                                 int64 stateIds[state.Id]
 
+                            index_stateToPc.[firstFreePositionInPcToState] <- int64 stateIds[state.Id]
+
+                            index_stateToPc.[firstFreePositionInPcToState + gameState.States.Length] <-
+                                int64 pathConditionVerticesIds[state.PathCondition.Id]
+
+
                             firstFreePositionInPcToState <- firstFreePositionInPcToState + 1
 
                             state.History
@@ -400,6 +413,12 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                                 let j = firstFreePositionInHistoryIndex + i
                                 historyIndex_vertexToState[j] <- int64 verticesIds[historyElem.GraphVertexId]
                                 historyIndex_vertexToState[numOfHistoryEdges + j] <- int64 stateIds[state.Id]
+
+                                historyIndex_stateToVertex[j] <- int64 stateIds[state.Id]
+
+                                historyIndex_stateToVertex[numOfHistoryEdges + j] <-
+                                    int64 verticesIds[historyElem.GraphVertexId]
+
 
                                 let j = firstFreePositionInHistoryAttributes + numOfHistoryEdgeAttributes * i
                                 historyAttributes[j] <- int64 historyElem.NumOfVisits
@@ -412,9 +431,11 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                                 + numOfHistoryEdgeAttributes * state.History.Length)
 
                         OrtValue.CreateTensorValueFromMemory(historyIndex_vertexToState, shapeOfHistory),
+                        OrtValue.CreateTensorValueFromMemory(historyIndex_stateToVertex, shapeOfHistory),
                         OrtValue.CreateTensorValueFromMemory(historyAttributes, shapeOfHistoryAttributes),
                         OrtValue.CreateTensorValueFromMemory(parentOf, shapeOfParentOf),
-                        OrtValue.CreateTensorValueFromMemory(index_pcToState, shapeOfPcToState)
+                        OrtValue.CreateTensorValueFromMemory(index_pcToState, shapeOfPcToState),
+                        OrtValue.CreateTensorValueFromMemory(index_stateToPc, shapeOfPcToState)
 
                     let statePosition_stateToVertex, statePosition_vertexToState =
                         let data_stateToVertex = Array.zeroCreate (2 * gameState.States.Length)
@@ -448,13 +469,16 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                     res.Add("gamevertex_to_gamevertex_type", vertexToVertexEdgesAttributes)
 
                     res.Add("gamevertex_history_statevertex_index", historyEdgesIndex_vertexToState)
+                    res.Add("statevertex_history_gamevertex_index", historyEdgesIndex_stateToVertex)
                     res.Add("gamevertex_history_statevertex_attrs", historyEdgesAttributes)
 
                     res.Add("gamevertex_in_statevertex", statePosition_vertexToState)
+                    res.Add("statevertex_in_gamevertex", statePosition_stateToVertex)
                     res.Add("statevertex_parentof_statevertex", parentOfEdges)
 
                     res.Add("pathconditionvertex_to_pathconditionvertex", pcToPcEdgeIndex)
                     res.Add("pathconditionvertex_to_statevertex", edgeIndex_pcToState)
+                    res.Add("statevertex_to_pathconditionvertex", edgeIndex_stateToPc)
 
                     res
 
