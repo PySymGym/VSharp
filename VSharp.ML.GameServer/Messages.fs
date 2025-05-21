@@ -109,11 +109,13 @@ type GameOverMessageBody =
     interface IRawOutgoingMessageBody
     val ActualCoverage: uint<percent>
     val TestsCount: uint32<test>
+    val StepsCount: uint32<step>
     val ErrorsCount: uint32<error>
 
-    new(actualCoverage, testsCount, errorsCount) =
+    new(actualCoverage, testsCount, stepsCount, errorsCount) =
         { ActualCoverage = actualCoverage
           TestsCount = testsCount
+          StepsCount = stepsCount
           ErrorsCount = errorsCount }
 
 [<Struct>]
@@ -371,7 +373,7 @@ type IncorrectPredictedStateIdMessageBody =
     new(stateId) = { StateId = stateId }
 
 type OutgoingMessage =
-    | GameOver of uint<percent> * uint32<test> * uint32<error>
+    | GameOver of uint<percent> * uint32<test> * uint32<step> * uint32<error>
     | MoveReward of Reward
     | IncorrectPredictedStateId of uint<stateId>
     | ReadyForNextStep of GameState
@@ -397,8 +399,8 @@ let deserializeInputMessage (messageData: byte[]) =
 
 let serializeOutgoingMessage (message: OutgoingMessage) =
     match message with
-    | GameOver(actualCoverage, testsCount, errorsCount) ->
-        RawOutgoingMessage("GameOver", box (GameOverMessageBody(actualCoverage, testsCount, errorsCount)))
+    | GameOver(actualCoverage, testsCount, stepsCount, errorsCount) ->
+        RawOutgoingMessage("GameOver", box (GameOverMessageBody(actualCoverage, testsCount, stepsCount, errorsCount)))
     | MoveReward reward -> RawOutgoingMessage("MoveReward", reward)
     | IncorrectPredictedStateId stateId ->
         RawOutgoingMessage("IncorrectPredictedStateId", IncorrectPredictedStateIdMessageBody stateId)

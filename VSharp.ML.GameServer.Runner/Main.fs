@@ -239,6 +239,7 @@ let ws port outputDirectory (webSocket: WebSocket) (context: HttpContext) =
                             GameOver(
                                 explorationResult.ActualCoverage,
                                 explorationResult.TestsCount,
+                                explorationResult.StepsCount,
                                 explorationResult.ErrorsCount
                             )
                         )
