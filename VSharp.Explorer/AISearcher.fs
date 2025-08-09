@@ -123,32 +123,27 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
             Application.applicationGraphDelta.Clear()
 
-            if aiMode <> Runner && stepsToPlay = stepsPlayed then
+            let toPredict =
+                match aiMode with
+                | TrainingSendEachStep
+                | TrainingSendModel ->
+                    if stepsPlayed > 0u<step> then
+                        gameStateDelta
+                    else
+                        gameState.Value
+                | Runner -> gameState.Value
+
+            let stateId = oracle.Predict toPredict
+            afterFirstAIPeek <- true
+            let state = availableStates |> Seq.tryFind (fun s -> s.internalId = stateId)
+            lastCollectedStatistics <- statistics
+
+            match state with
+            | Some state -> Some state
+            | None ->
+                incorrectPredictedStateId <- true
+                oracle.Feedback(Feedback.IncorrectPredictedStateId stateId)
                 None
-            else
-                let toPredict =
-                    match aiMode with
-                    | TrainingSendEachStep
-                    | TrainingSendModel ->
-                        if stepsPlayed > 0u<step> then
-                            gameStateDelta
-                        else
-                            gameState.Value
-                    | Runner -> gameState.Value
-
-                let stateId = oracle.Predict toPredict
-
-                afterFirstAIPeek <- true
-                let state = availableStates |> Seq.tryFind (fun s -> s.internalId = stateId)
-                lastCollectedStatistics <- statistics
-                stepsPlayed <- stepsPlayed + 1u<step>
-
-                match state with
-                | Some state -> Some state
-                | None ->
-                    incorrectPredictedStateId <- true
-                    oracle.Feedback(Feedback.IncorrectPredictedStateId stateId)
-                    None
 
     static member updateGameState (delta: GameState) (gameState: Option<GameState>) =
         match gameState with
