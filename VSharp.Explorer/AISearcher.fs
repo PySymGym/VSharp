@@ -180,7 +180,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                     State(
                         s.Id,
                         s.Position,
-                        s.PathConditionSize,
+                        s.PathCondition,
                         s.VisitedAgainVertices,
                         s.VisitedNotCoveredVerticesInZone,
                         s.VisitedNotCoveredVerticesOutOfZone,
@@ -383,7 +383,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             firstFreePositionInParentsOf <- firstFreePositionInParentsOf + state.Children.Length
 
                             index_pcToState.[firstFreePositionInPcToState] <-
-                                int64 pathConditionVerticesIds[state.PathConditionSize.Id]
+                                int64 pathConditionVerticesIds[state.PathCondition.Id]
 
                             index_pcToState.[firstFreePositionInPcToState + gameState.States.Length] <-
                                 int64 stateIds[state.Id]
