@@ -137,6 +137,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
             afterFirstAIPeek <- true
             let state = availableStates |> Seq.tryFind (fun s -> s.internalId = stateId)
             lastCollectedStatistics <- statistics
+            stepsPlayed <- stepsPlayed + 1u<step>
 
             match state with
             | Some state -> Some state
