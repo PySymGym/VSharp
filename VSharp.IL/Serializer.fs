@@ -365,8 +365,9 @@ let collectPathCondition
     term
     (termsWithId: Dictionary<Core.term, uint<pathConditionVertexId>>)
     (processedPathConditionVertices: HashSet<Core.term>)
+    maxDepth
     = // TODO: Support other operations
-    let termsToVisit = Stack<Core.term> [| term |]
+    let termsToVisit = Queue<Core.term * int> [| (term, 0) |]
     let pathConditionDelta = ResizeArray<PathConditionVertex>()
 
     let getIdForTerm term =
@@ -377,14 +378,18 @@ let collectPathCondition
             termsWithId.Add(term, newId)
             newId
 
-    let handleChild term (children: ResizeArray<_>) =
+    let handleChild depth term (children: ResizeArray<_>) =
         children.Add(getIdForTerm term)
-        termsToVisit.Push term
+
+        if depth < maxDepth then
+            termsToVisit.Enqueue(term, depth + 1)
 
     while termsToVisit.Count > 0 do
-        let currentTerm = termsToVisit.Pop()
+        let currentTerm, depth = termsToVisit.Dequeue()
+        let handleChild = handleChild depth
 
         let markAsVisited (vertexType: pathConditionVertexType) children =
+            let children = if depth = maxDepth then [||] else children
             let newVertex = PathConditionVertex(getIdForTerm currentTerm, vertexType, children)
             processedPathConditionVertices.Add currentTerm |> ignore
             pathConditionDelta.Add newVertex
@@ -473,6 +478,8 @@ let collectPathCondition
 
     pathConditionDelta
 
+let depth = 2
+
 let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates processedPathConditionVertices termsWithId =
 
     let vertices = ResizeArray<_>()
@@ -493,7 +500,9 @@ let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates process
                 let pathCondition = s.PathCondition |> PC.toSeq
 
                 for term in pathCondition do
-                    pathConditionDelta.AddRange(collectPathCondition term termsWithId processedPathConditionVertices)
+                    pathConditionDelta.AddRange(
+                        collectPathCondition term termsWithId processedPathConditionVertices depth
+                    )
 
                 let pathConditionRoot =
                     PathConditionVertex(
