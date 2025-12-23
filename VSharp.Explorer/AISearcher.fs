@@ -361,8 +361,12 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                         let parentOf = Array.zeroCreate (2 * numOfParentOfEdges)
                         let shapeOfHistory = [| 2L; numOfHistoryEdges |]
                         let historyIndex_vertexToState = Array.zeroCreate (2 * numOfHistoryEdges)
-                        let shapeOfPcToState = [| 2L; gameState.States.Length |]
-                        let index_pcToState = Array.zeroCreate (2 * gameState.States.Length)
+
+                        let pathConditionNum = 
+                            gameState.States 
+                            |> Array.sumBy(fun s -> s.PathCondition.Length)
+                        let shapeOfPcToState = [| 2L; pathConditionNum |]
+                        let index_pcToState = Array.zeroCreate (2 * pathConditionNum)
 
                         let shapeOfHistoryAttributes =
                             [| int64 numOfHistoryEdges; int64 numOfHistoryEdgeAttributes |]
@@ -381,15 +385,11 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                                 parentOf[j] <- int64 stateIds[state.Id]
                                 parentOf[numOfParentOfEdges + j] <- int64 stateIds[children])
 
-                            firstFreePositionInParentsOf <- firstFreePositionInParentsOf + state.Children.Length
-
-                            index_pcToState.[firstFreePositionInPcToState] <-
-                                int64 pathConditionVerticesIds[state.PathCondition.[firstFreePositionInPcToState]]
-
-                            index_pcToState.[firstFreePositionInPcToState + gameState.States.Length] <-
-                                int64 stateIds[state.Id]
-
-                            firstFreePositionInPcToState <- firstFreePositionInPcToState + 1
+                            state.PathCondition
+                            |> Array.iteri (fun i pcId ->
+                                let j = firstFreePositionInPcToState + i
+                                index_pcToState[j] <- int64 pathConditionVerticesIds[pcId]
+                                index_pcToState[numOfParentOfEdges + j] <- int64 stateIds[state.Id])
 
                             state.History
                             |> Array.iteri (fun i historyElem ->
