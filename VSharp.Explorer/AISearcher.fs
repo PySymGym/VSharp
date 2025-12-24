@@ -385,11 +385,15 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                                 parentOf[j] <- int64 stateIds[state.Id]
                                 parentOf[numOfParentOfEdges + j] <- int64 stateIds[children])
 
+                            firstFreePositionInParentsOf <- firstFreePositionInParentsOf + state.Children.Length
+
                             state.PathCondition
                             |> Array.iteri (fun i pcId ->
                                 let j = firstFreePositionInPcToState + i
                                 index_pcToState[j] <- int64 pathConditionVerticesIds[pcId]
                                 index_pcToState[numOfParentOfEdges + j] <- int64 stateIds[state.Id])
+                                
+                            firstFreePositionInPcToState <- firstFreePositionInPcToState + 1
 
                             state.History
                             |> Array.iteri (fun i historyElem ->
