@@ -393,7 +393,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                                 index_pcToState[j] <- int64 pathConditionVerticesIds[pcId]
                                 index_pcToState[numOfParentOfEdges + j] <- int64 stateIds[state.Id])
                                 
-                            firstFreePositionInPcToState <- firstFreePositionInPcToState + 1
+                            firstFreePositionInPcToState <- firstFreePositionInPcToState + state.PathCondition.Length
 
                             state.History
                             |> Array.iteri (fun i historyElem ->
