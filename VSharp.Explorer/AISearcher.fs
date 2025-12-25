@@ -391,7 +391,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             |> Array.iteri (fun i pcId ->
                                 let j = firstFreePositionInPcToState + i
                                 index_pcToState[j] <- int64 pathConditionVerticesIds[pcId]
-                                index_pcToState[numOfParentOfEdges + j] <- int64 stateIds[state.Id])
+                                index_pcToState[pathConditionNum + j] <- int64 stateIds[state.Id])
                                 
                             firstFreePositionInPcToState <- firstFreePositionInPcToState + state.PathCondition.Length
 
