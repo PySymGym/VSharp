@@ -295,9 +295,9 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
                         OrtValue.CreateTensorValueFromMemory(attributes, shape)
 
-                    let states, numOfParentOfEdges, numOfPathConditionEdjes, numOfHistoryEdges =
+                    let states, numOfParentOfEdges, numOfPathConditionEdges, numOfHistoryEdges =
                         let mutable numOfParentOfEdges = 0
-                        let mutable numOfPathConditionEdjes = 0
+                        let mutable numOfPathConditionEdges = 0
                         let mutable numOfHistoryEdges = 0
                         let shape = [| int64 gameState.States.Length; numOfStateAttributes |]
                         let attributes = Array.zeroCreate (gameState.States.Length * numOfStateAttributes)
@@ -305,7 +305,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                         for i in 0 .. gameState.States.Length - 1 do
                             let v = gameState.States.[i]
                             numOfParentOfEdges <- numOfParentOfEdges + v.Children.Length
-                            numOfPathConditionEdjes <- numOfPathConditionEdjes + v.PathCondition.Length 
+                            numOfPathConditionEdges <- numOfPathConditionEdges + v.PathCondition.Length 
                             numOfHistoryEdges <- numOfHistoryEdges + v.History.Length
                             stateIds.Add(v.Id, i)
                             let j = i * numOfStateAttributes
@@ -316,7 +316,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             attributes.[j + 4] <- float32 v.StepWhenMovedLastTime
                             attributes.[j + 5] <- float32 v.InstructionsVisitedInCurrentBlock
 
-                        OrtValue.CreateTensorValueFromMemory(attributes, shape), numOfParentOfEdges, numOfPathConditionEdjes, numOfHistoryEdges
+                        OrtValue.CreateTensorValueFromMemory(attributes, shape), numOfParentOfEdges, numOfPathConditionEdges, numOfHistoryEdges
 
                     let pcToPcEdgeIndex =
                         let shapeOfIndex = [| 2L; numOfPcToPcEdges |]
@@ -363,8 +363,8 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                         let parentOf = Array.zeroCreate (2 * numOfParentOfEdges)
                         let shapeOfHistory = [| 2L; numOfHistoryEdges |]
                         let historyIndex_vertexToState = Array.zeroCreate (2 * numOfHistoryEdges)
-                        let shapeOfPcToState = [| 2L; numOfPathConditionEdjes |]
-                        let index_pcToState = Array.zeroCreate (2 * numOfPathConditionEdjes)
+                        let shapeOfPcToState = [| 2L; numOfPathConditionEdges |]
+                        let index_pcToState = Array.zeroCreate (2 * numOfPathConditionEdges)
 
                         let shapeOfHistoryAttributes =
                             [| int64 numOfHistoryEdges; int64 numOfHistoryEdgeAttributes |]
@@ -389,7 +389,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             |> Array.iteri (fun i pcId ->
                                 let j = firstFreePositionInPcToState + i
                                 index_pcToState[j] <- int64 pathConditionVerticesIds[pcId]
-                                index_pcToState[numOfPathConditionEdjes + j] <- int64 stateIds[state.Id])
+                                index_pcToState[numOfPathConditionEdges + j] <- int64 stateIds[state.Id])
                                 
                             firstFreePositionInPcToState <- firstFreePositionInPcToState + state.PathCondition.Length
 
