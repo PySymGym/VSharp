@@ -295,16 +295,18 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
                         OrtValue.CreateTensorValueFromMemory(attributes, shape)
 
-                    let states, numOfParentOfEdges, numOfHistoryEdges =
+                    let states, numOfParentOfEdges, numOfPathConditionEdges, numOfHistoryEdges =
                         let mutable numOfParentOfEdges = 0
+                        let mutable numOfPathConditionEdges = 0
                         let mutable numOfHistoryEdges = 0
                         let shape = [| int64 gameState.States.Length; numOfStateAttributes |]
                         let attributes = Array.zeroCreate (gameState.States.Length * numOfStateAttributes)
 
                         for i in 0 .. gameState.States.Length - 1 do
                             let v = gameState.States.[i]
-                            numOfHistoryEdges <- numOfHistoryEdges + v.History.Length
                             numOfParentOfEdges <- numOfParentOfEdges + v.Children.Length
+                            numOfPathConditionEdges <- numOfPathConditionEdges + v.PathCondition.Length 
+                            numOfHistoryEdges <- numOfHistoryEdges + v.History.Length
                             stateIds.Add(v.Id, i)
                             let j = i * numOfStateAttributes
                             attributes.[j] <- float32 v.Position
@@ -314,7 +316,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                             attributes.[j + 4] <- float32 v.StepWhenMovedLastTime
                             attributes.[j + 5] <- float32 v.InstructionsVisitedInCurrentBlock
 
-                        OrtValue.CreateTensorValueFromMemory(attributes, shape), numOfParentOfEdges, numOfHistoryEdges
+                        OrtValue.CreateTensorValueFromMemory(attributes, shape), numOfParentOfEdges, numOfPathConditionEdges, numOfHistoryEdges
 
                     let pcToPcEdgeIndex =
                         let shapeOfIndex = [| 2L; numOfPcToPcEdges |]
@@ -361,8 +363,8 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
                         let parentOf = Array.zeroCreate (2 * numOfParentOfEdges)
                         let shapeOfHistory = [| 2L; numOfHistoryEdges |]
                         let historyIndex_vertexToState = Array.zeroCreate (2 * numOfHistoryEdges)
-                        let shapeOfPcToState = [| 2L; gameState.States.Length |]
-                        let index_pcToState = Array.zeroCreate (2 * gameState.States.Length)
+                        let shapeOfPcToState = [| 2L; numOfPathConditionEdges |]
+                        let index_pcToState = Array.zeroCreate (2 * numOfPathConditionEdges)
 
                         let shapeOfHistoryAttributes =
                             [| int64 numOfHistoryEdges; int64 numOfHistoryEdgeAttributes |]
@@ -383,13 +385,13 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
 
                             firstFreePositionInParentsOf <- firstFreePositionInParentsOf + state.Children.Length
 
-                            index_pcToState.[firstFreePositionInPcToState] <-
-                                int64 pathConditionVerticesIds[state.PathCondition.Id]
-
-                            index_pcToState.[firstFreePositionInPcToState + gameState.States.Length] <-
-                                int64 stateIds[state.Id]
-
-                            firstFreePositionInPcToState <- firstFreePositionInPcToState + 1
+                            state.PathCondition
+                            |> Array.iteri (fun i pcId ->
+                                let j = firstFreePositionInPcToState + i
+                                index_pcToState[j] <- int64 pathConditionVerticesIds[pcId]
+                                index_pcToState[numOfPathConditionEdges + j] <- int64 stateIds[state.Id])
+                                
+                            firstFreePositionInPcToState <- firstFreePositionInPcToState + state.PathCondition.Length
 
                             state.History
                             |> Array.iteri (fun i historyElem ->

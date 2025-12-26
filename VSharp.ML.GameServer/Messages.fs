@@ -72,7 +72,6 @@ type pathConditionVertexType =
     | StandardFunctionApplication = 45
     | Cast = 46
     | Combine = 47
-    | PathConditionRoot = 48
 
 
 [<Struct>]
@@ -153,7 +152,7 @@ type StateHistoryElem =
 type State =
     val Id: uint<stateId>
     val Position: uint<byte_offset> // to basic block id
-    val PathCondition: PathConditionVertex
+    val PathCondition: array<uint<pathConditionVertexId>> 
     val VisitedAgainVertices: uint
     val VisitedNotCoveredVerticesInZone: uint
     val VisitedNotCoveredVerticesOutOfZone: uint
