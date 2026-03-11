@@ -213,7 +213,7 @@ type internal AISearcher(oracle: Oracle, aiAgentTrainingMode: Option<AIAgentTrai
         ) =
         let numOfVertexAttributes = 7
         let numOfStateAttributes = 6
-        let numOfPathConditionVertexAttributes = 49
+        let numOfPathConditionVertexAttributes = 48
         let numOfHistoryEdgeAttributes = 2
 
 
