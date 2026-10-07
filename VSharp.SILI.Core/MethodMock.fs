@@ -20,9 +20,12 @@ with
         override x.TypeOfLocation = x.t
         override x.SubTerms = List.empty
         override x.Time = VectorTime.zero
+    // The name must uniquely identify the mocked method: different methods may share a short
+    // name (e.g. get_Item of List<DiscSession> and List<DiscTrack>), and colliding names make
+    // the solver encode distinct symbolic values as the same variable.
     override x.ToString() =
         let args = x.args |> List.map toString |> join ", "
-        $"{x.mock.Method.Name}({args}):{x.constIndex}"
+        $"{Reflection.getFullMethodName x.mock.Method.MethodBase}({args}):{x.constIndex}"
 
 and MethodMock(method : IMethod, mockingType : MockingType) =
     let mutable constIndex = 0
