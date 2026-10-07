@@ -325,6 +325,7 @@ module API =
         val AllocateDefaultClass : state -> Type -> term
         val AllocateMock : state -> ITypeMock -> Type -> term
         val AllocateDefaultArray : state -> term list -> Type -> term
+        val AllocateArray : state -> Type -> term list -> term list -> term
         val AllocateVectorArray : state -> term -> Type -> term
         val AllocateConcreteVectorArray : state -> term -> Type -> 'a seq -> term
         val AllocateArrayFromFieldInfo : state -> FieldInfo -> term

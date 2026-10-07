@@ -756,6 +756,29 @@ type ILInterpreter() as this =
             x.StElemCommon typ cilState arrayRef indices value
         | _ -> __unreachable__()
 
+    member private x.IsArrayClone (method : Method) =
+        method.Name = "Clone" && method.DeclaringType = typeof<System.Array>
+
+    // System.Array.Clone is an intrinsic without a symbolically executable body, so we model it
+    // directly: allocate a new array with the same type, bounds and lengths, then copy elements.
+    member private x.InvokeArrayClone (cilState : cilState) (method : Method) thisOption =
+        match thisOption with
+        | Some arrayRef ->
+            let cloneCase (cilState : cilState) k =
+                let state = cilState.state
+                let arrayType = MostConcreteTypeOfRef state arrayRef
+                let dims = List.init (Types.RankOf arrayType) MakeNumber
+                let lengths = List.map (Memory.ArrayLengthByDimension state arrayRef) dims
+                let lowerBounds = List.map (Memory.ArrayLowerBoundByDimension state arrayRef) dims
+                let newArray = Memory.AllocateArray state arrayType lowerBounds lengths
+                let zero = MakeNumber 0
+                let count = Memory.CountOfArrayElements state arrayRef
+                Memory.CopyArray state arrayRef zero arrayType newArray zero arrayType count
+                cilState.Push newArray
+                k [cilState]
+            x.NpeOrInvokeStatementCIL cilState arrayRef cloneCase id
+        | _ -> __unreachable__()
+
     // NOTE: When executing ldsfld, call and so on, we should previously initialize statics.
     // NOTE: Continuation 'whenInitializedCont' contains exploration of current instruction 'I' on ipStack.
     // NOTE: If statics was already initialized or we have no static constructor,
@@ -944,6 +967,8 @@ type ILInterpreter() as this =
         elif x.IsArrayGetOrSet method then
             let typeAndMethodArgs = typeAndMethodArgs()
             x.InvokeArrayGetOrSet cilState method thisOption typeAndMethodArgs |> List.map fallThroughCall |> k
+        elif x.IsArrayClone method then
+            x.InvokeArrayClone cilState method thisOption |> List.map fallThroughCall |> k
         elif ExternMocker.ExtMocksSupported && x.ShouldMock method then
             let mockMethod = ExternMockAndCall cilState.state method None args
             match mockMethod with

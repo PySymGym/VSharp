@@ -651,6 +651,10 @@ module API =
             let address = state.memory.AllocateArray typ zeroLowerBounds lengths
             HeapRef address typ
 
+        let AllocateArray state typ lowerBounds lengths =
+            let address = state.memory.AllocateArray typ lowerBounds lengths
+            HeapRef address typ
+
         let AllocateVectorArray state length elementType =
             let address = state.memory.AllocateVector elementType length
             HeapRef address (elementType.MakeArrayType())
