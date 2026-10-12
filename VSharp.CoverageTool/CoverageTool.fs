@@ -224,8 +224,12 @@ type PassiveCoverageTool(workingDirectory: DirectoryInfo, method: MethodBase) =
                 match getHistory () with
                 | Some history -> computeCoverage method.CFG history
                 | None ->
-                    Logger.error "Failed to retrieve coverage locations"
+                    // writeLine (not Logger.error): the generator runs with
+                    // Verbosity.Quiet, which would suppress the diagnostic.
+                    Logger.writeLine "Failed to retrieve coverage locations"
                     -1
             else
-                Logger.error $"Run with coverage failed with exit code: {proc.ExitCode}"
+                // writeLine (not Logger.error): the generator runs with
+                // Verbosity.Quiet, which would suppress the diagnostic.
+                Logger.writeLine $"Run with coverage failed with exit code: {proc.ExitCode}"
                 -1
