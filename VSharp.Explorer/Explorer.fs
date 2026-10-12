@@ -500,6 +500,7 @@ type private SVMExplorer(explorationOptions: ExplorationOptions, statistics: SVM
 
                         pathConditionVertices.Clear()
                         resetPathConditionVertexIdCounter ()
+                        termsWithId.Clear()
                         firstFreeEpisodeNumber <- firstFreeEpisodeNumber + 1
 
                     x.Forward(s)
