@@ -185,6 +185,11 @@ type PassiveCoverageTool(workingDirectory: DirectoryInfo, method: MethodBase) =
         (double coveredSize) / (double cfg.MethodSize) * 100. |> int
 
     member this.RunWithCoverage (args: string) =
+        this.RunWithCoverage(args, -1)
+
+    // timeoutMs <= 0 means no timeout. A positive value bounds the test run:
+    // generated tests with pathological inputs would otherwise never terminate.
+    member this.RunWithCoverage (args: string, timeoutMs: int) =
         let procInfo = ProcessStartInfo()
         procInfo.Arguments <- args
         procInfo.FileName <- DotnetExecutablePath.ExecutablePath
@@ -201,9 +206,19 @@ type PassiveCoverageTool(workingDirectory: DirectoryInfo, method: MethodBase) =
                 (fun x -> Logger.info $"{x}"),
                 (fun x -> Logger.error $"{x}")
             )
-            proc.WaitForExit()
 
-            if proc.IsSuccess() then
+            let finished =
+                if timeoutMs > 0 then proc.WaitForExit(timeoutMs)
+                else
+                    proc.WaitForExit()
+                    true
+
+            if not finished then
+                proc.Kill(true)
+                proc.WaitForExit()
+                Logger.error $"Test run timed out after {timeoutMs} ms"
+                -1
+            elif proc.IsSuccess() then
                 match getHistory () with
                 | Some history -> computeCoverage method.CFG history
                 | None ->
