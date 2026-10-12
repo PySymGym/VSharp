@@ -216,7 +216,9 @@ type PassiveCoverageTool(workingDirectory: DirectoryInfo, method: MethodBase) =
             if not finished then
                 proc.Kill(true)
                 proc.WaitForExit()
-                Logger.error $"Test run timed out after {timeoutMs} ms"
+                // writeLine (not Logger.error): the generator runs with
+                // Verbosity.Quiet, which would suppress the diagnostic.
+                Logger.writeLine $"Test run timed out after {timeoutMs} ms"
                 -1
             elif proc.IsSuccess() then
                 match getHistory () with
