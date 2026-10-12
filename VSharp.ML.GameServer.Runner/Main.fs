@@ -47,6 +47,7 @@ type CliArguments =
     | [<Unique; Mandatory>] Mode of Mode
     | [<Unique>] OutFolder of string
     | [<Unique>] StepsToSerialize of uint
+    | [<Unique>] RandomSeed of int
     | [<Unique>] Model of string
     | [<Unique>] StepsToPlay of uint<step>
     | [<Unique>] DefaultSearcher of string
@@ -68,6 +69,8 @@ type CliArguments =
                 "Mode to run application. Server --- to train network, Generator --- to generate data for training."
             | OutFolder _ -> "Folder to store generated data."
             | StepsToSerialize _ -> "Maximal number of steps for each method to serialize."
+            | RandomSeed _ ->
+                "Fixed seed for random operations during dataset generation. A negative value (default) keeps the unseeded, non-deterministic exploration."
             | Model _ -> """Path to ONNX model (use it for training in mode "SendModel")"""
             | StepsToPlay _ -> """Steps required to play (after `StepsToStart` steps)"""
             | DefaultSearcher _ -> """Defines the default searcher algorithm (BFS | DFS)"""
@@ -260,7 +263,7 @@ let app port outputDirectory : WebPart =
 let serializeExplorationResult (explorationResult: ExplorationResult) =
     $"{explorationResult.ActualCoverage} {explorationResult.TestsCount} {explorationResult.StepsCount} {explorationResult.ErrorsCount}"
 
-let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArray<GameMap>) stepsToSerialize =
+let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArray<GameMap>) stepsToSerialize randomSeed =
     for map in maps do
         if map.StepsToStart = 0u<step> then
             printfn $"Generation for {map.MapName} started."
@@ -286,6 +289,7 @@ let generateDataForPretraining outputDirectory datasetBasePath (maps: ResizeArra
                     searchStrategy = SearchStrategy.ExecutionTreeContributedCoverage,
                     stepsLimit = stepsToSerialize,
                     solverTimeout = 2,
+                    randomSeed = randomSeed,
                     aiOptions = DatasetGenerator aiBaseOptions
                 )
 
@@ -458,11 +462,13 @@ let main args =
         let datasetDescription = args.GetResult <@ DatasetDescription @>
         let datasetBasePath = args.GetResult <@ DatasetBasePath @>
         let stepsToSerialize = args.GetResult(StepsToSerialize, defaultValue = 500u)
+        let randomSeed = args.GetResult(RandomSeed, defaultValue = -1)
 
+        printfn $"randomSeed: {randomSeed}"
 
         let _ = cleanOutputDirectory ()
         let maps = loadGameMaps datasetDescription
-        generateDataForPretraining outputDirectory datasetBasePath maps stepsToSerialize
+        generateDataForPretraining outputDirectory datasetBasePath maps stepsToSerialize randomSeed
     | x -> failwithf $"Unexpected mode {x}."
 
     0
