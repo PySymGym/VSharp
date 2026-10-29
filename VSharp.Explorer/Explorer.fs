@@ -498,7 +498,6 @@ type private SVMExplorer(explorationOptions: ExplorationOptions, statistics: SVM
                             (Path.Combine(folderToStoreSerializationResult, string firstFreeEpisodeNumber))
                             s.internalId
 
-                        pathConditionVertices.Clear()
                         resetPathConditionVertexIdCounter ()
                         termsWithId.Clear()
                         firstFreeEpisodeNumber <- firstFreeEpisodeNumber + 1

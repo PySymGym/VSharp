@@ -283,14 +283,20 @@ let computeStatistics (gameState: GameState) =
         totalVisibleVerticesInZone
     )
 
+// Stable semantic key for a basic block (method identity + position within
+// it); used to order blocks deterministically at serialization time.
+let basicBlockKey (bb: BasicBlock) = (bb.Method.FullName, int bb.StartOffset)
+
 let collectStatesInfoToDump (basicBlocks: ResizeArray<BasicBlock>) =
     let statesMetrics = ResizeArray<_>()
 
-    for currentBasicBlock in basicBlocks do
+    for currentBasicBlock in
+        basicBlocks |> Seq.sortBy basicBlockKey do
         let interproceduralGraphDistanceFrom =
             Dictionary<Assembly, distanceCache<IInterproceduralCfgNode>>()
 
         currentBasicBlock.AssociatedStates
+        |> Seq.sortBy (fun (s: IGraphTrackableState) -> s.Id)
         |> Seq.iter (fun s -> statesMetrics.Add(calculateStateMetrics interproceduralGraphDistanceFrom s))
 
     let statesInfoToDump =
@@ -346,8 +352,85 @@ let collectStatesInfoToDump (basicBlocks: ResizeArray<BasicBlock>) =
                 normalize minDistToUncovered m.DistanceToNearestUncovered m,
                 normalize minDistToUncovered m.DistanceToNearestNotVisited m
             ))
+        |> ResizeArray.sortBy (fun s -> s.StateId)
 
     statesInfoToDump
+
+// Injective name for an operation (Operations.operationToString is not:
+// Divide and Divide_Un both render as " / ").
+let operationName (op: Core.operation) : string =
+    match op with
+    | Operator ot -> $"Op:{Enum.GetName(typeof<OperationType>, ot)}"
+    | Application f -> $"App:{Enum.GetName(typeof<StandardFunction>, f)}"
+    | Cast(src, dst) -> $"Cast:{src}->{dst}"
+    | Combine -> "Combine"
+
+// Canonical structural signature of a term: a deterministic stand-in for the
+// term's structure, used to order and deduplicate path-condition vertices so
+// that serialization is a pure function of the logical state.
+type termSig =
+    | SigAtom of string
+    | SigNode of string * termSig list
+
+// Memo is keyed by term object identity; structurally equal but distinct
+// objects simply recompute the same signature. The memo is threaded per
+// serialization episode (no module-level cache).
+let rec termSig (memo: Dictionary<Core.term, termSig>) (t: Core.term) : termSig =
+    match memo.TryGetValue t with
+    | true, s -> s
+    | false, _ ->
+        let s =
+            match t.term with
+            | Nop -> SigAtom "Nop"
+            | Concrete(obj, typ) -> SigNode("Concrete", [SigAtom (sprintf "%O" obj); SigAtom (string typ)])
+            | Constant(name, _, typ) -> SigNode("Constant", [SigAtom name.v; SigAtom (string typ)])
+            | Expression(op, terms, typ) ->
+                SigNode(operationName op, List.map (termSig memo) terms @ [SigAtom (string typ)])
+            | Struct(fields, typ) ->
+                let fields =
+                    PersistentDict.toSeq fields
+                    |> List.ofSeq
+                    |> List.map (fun (fid, f) -> SigNode("Field", [SigAtom (string fid); termSig memo f]))
+                    |> List.sort
+                SigNode("Struct", fields @ [SigAtom (string typ)])
+            | HeapRef(addr, typ) -> SigNode("HeapRef", [termSig memo addr; SigAtom (string typ)])
+            | Ref addr -> SigNode("Ref", [addressSig memo addr])
+            | Ptr(ptrBase, typ, offset) -> SigNode("Ptr", [pointerBaseSig memo ptrBase; SigAtom (string typ); termSig memo offset])
+            | Slice(t, slices) ->
+                SigNode(
+                    "Slice",
+                    [termSig memo t]
+                    @ List.map
+                        (fun (s, e, p, w) -> SigNode("SliceElem", [termSig memo s; termSig memo e; termSig memo p; SigAtom (string w)]))
+                        slices)
+            | Ite ite ->
+                SigNode(
+                    "Ite",
+                    List.map (fun (g, v) -> SigNode("IteBranch", [termSig memo g; termSig memo v])) ite.branches
+                    @ [termSig memo ite.elseValue])
+        memo.[t] <- s
+        s
+
+and addressSig (memo: Dictionary<Core.term, termSig>) (a: Core.address) : termSig =
+    match a with
+    | PrimitiveStackLocation key -> SigAtom $"Addr:Stack:{key}"
+    | StructField(addr, field) -> SigNode("Addr:StructField", [addressSig memo addr; SigAtom (string field)])
+    | StackBufferIndex(key, idx) -> SigNode("Addr:StackBufferIndex", [SigAtom (string key); termSig memo idx])
+    | BoxedLocation(t, typ) -> SigNode("Addr:Boxed", [termSig memo t; SigAtom (string typ)])
+    | ClassField(addr, field) -> SigNode("Addr:ClassField", [termSig memo addr; SigAtom (string field)])
+    | ArrayIndex(addr, indices, typ) ->
+        SigNode("Addr:ArrayIndex", [termSig memo addr] @ List.map (termSig memo) indices @ [SigAtom (string typ)])
+    | ArrayLowerBound(addr, dim, typ) ->
+        SigNode("Addr:ArrayLowerBound", [termSig memo addr; termSig memo dim; SigAtom (string typ)])
+    | ArrayLength(addr, dim, typ) ->
+        SigNode("Addr:ArrayLength", [termSig memo addr; termSig memo dim; SigAtom (string typ)])
+    | StaticField(typ, field) -> SigNode("Addr:StaticField", [SigAtom (string typ); SigAtom (string field)])
+
+and pointerBaseSig (memo: Dictionary<Core.term, termSig>) (b: Core.pointerBase) : termSig =
+    match b with
+    | StackLocation key -> SigAtom $"PtrBase:Stack:{key}"
+    | HeapLocation(addr, typ) -> SigNode("PtrBase:Heap", [termSig memo addr; SigAtom (string typ)])
+    | StaticLocation typ -> SigAtom $"PtrBase:Static:{typ}"
 
 let getFirstFreePathConditionVertexId, resetPathConditionVertexIdCounter =
     let mutable count = 0u<pathConditionVertexId>
@@ -358,50 +441,72 @@ let getFirstFreePathConditionVertexId, resetPathConditionVertexIdCounter =
         res
     , fun () -> count <- 0u<pathConditionVertexId>
 
-let pathConditionVertices = HashSet<Core.term>()
-let termsWithId = Dictionary<Core.term, uint<pathConditionVertexId>>()
+let termsWithId = Dictionary<termSig, uint<pathConditionVertexId>>()
 
 let collectPathCondition
-    term
-    (termsWithId: Dictionary<Core.term, uint<pathConditionVertexId>>)
-    (processedPathConditionVertices: HashSet<Core.term>)
+    (root: Core.term)
+    (sigMemo: Dictionary<Core.term, termSig>)
+    (termsWithId: Dictionary<termSig, uint<pathConditionVertexId>>)
+    : ResizeArray<PathConditionVertex>
     = // TODO: Support other operations
-    let termsToVisit = Stack<Core.term> [| term |]
-    let pathConditionDelta = ResizeArray<PathConditionVertex>()
+    // Collect every term reachable from root, mirroring the traversal the
+    // serializer has always performed (Expression operands, Struct field
+    // values, Ptr offset, Slice elements; HeapRef/Ref/Ite contribute no
+    // children).
+    let reachable = ResizeArray<Core.term>()
+    let seen = HashSet<Core.term>()
+    let toVisit = Stack<Core.term> [| root |]
 
-    let getIdForTerm term =
-        if termsWithId.ContainsKey term then
-            termsWithId.[term]
-        else
-            let newId = getFirstFreePathConditionVertexId ()
-            termsWithId.Add(term, newId)
-            newId
+    while toVisit.Count > 0 do
+        let t = toVisit.Pop()
 
-    let handleChild term (children: ResizeArray<_>) =
-        children.Add(getIdForTerm term)
-        termsToVisit.Push term
+        if seen.Add t then
+            reachable.Add t
+            match t.term with
+            | Expression(_, terms, _) -> terms |> List.iter toVisit.Push
+            | Struct(fields, _) -> PersistentDict.toSeq fields |> Seq.iter (fun (_, f) -> toVisit.Push f)
+            | Ptr(_, _, offset) -> toVisit.Push offset
+            | Slice(t, slices) ->
+                toVisit.Push t
 
-    while termsToVisit.Count > 0 do
-        let currentTerm = termsToVisit.Pop()
+                for s, e, p, _ in slices do
+                    toVisit.Push s
+                    toVisit.Push e
+                    toVisit.Push p
+            | _ -> ()
 
-        let markAsVisited (vertexType: pathConditionVertexType) children =
-            let newVertex = PathConditionVertex(getIdForTerm currentTerm, vertexType, children)
-            processedPathConditionVertices.Add currentTerm |> ignore
-            pathConditionDelta.Add newVertex
+    // Assign IDs to all not-yet-seen signatures in sorted order (two passes,
+    // so that child IDs exist when the vertices are built).
+    let newSigs =
+        reachable
+        |> Seq.map (fun t -> termSig sigMemo t)
+        |> Seq.distinct
+        |> List.ofSeq
+        |> List.sort
+        |> List.filter (fun s -> not <| termsWithId.ContainsKey s)
 
-        if not <| processedPathConditionVertices.Contains currentTerm then
-            match currentTerm.term with
-            | Nop -> markAsVisited pathConditionVertexType.Nop [||]
-            | Concrete(_, _) -> markAsVisited pathConditionVertexType.Constant [||]
-            | Constant(_, _, _) -> markAsVisited pathConditionVertexType.Constant [||]
-            | Expression(operation, termList, _) ->
-                let children = ResizeArray<uint<pathConditionVertexId>>()
+    for s in newSigs do
+        termsWithId.[s] <- getFirstFreePathConditionVertexId ()
 
-                for t in termList do
-                    handleChild t children
+    let representative = Dictionary<termSig, Core.term>()
 
-                let children = children.ToArray()
+    for t in reachable do
+        let s = termSig sigMemo t
 
+        if not (representative.ContainsKey s) then
+            representative.[s] <- t
+
+    let idOf (t: Core.term) = termsWithId.[termSig sigMemo t]
+
+    let buildVertex (id: uint<pathConditionVertexId>) (t: Core.term) =
+        match t.term with
+        | Nop -> PathConditionVertex(id, pathConditionVertexType.Nop, [||])
+        | Concrete(_, _) -> PathConditionVertex(id, pathConditionVertexType.Constant, [||])
+        | Constant(_, _, _) -> PathConditionVertex(id, pathConditionVertexType.Constant, [||])
+        | Expression(operation, termList, _) ->
+            let children = termList |> List.map idOf |> Array.ofList
+
+            let vertexType =
                 match operation with
                 | Operator operator ->
                     match operator with
@@ -441,39 +546,49 @@ let collectPathCondition
                     | OperationType.ShiftRight -> pathConditionVertexType.ShiftRight
                     | OperationType.ShiftRight_Un -> pathConditionVertexType.ShiftRight_Un
                     | unexpectedOperation -> failwith $"Add {unexpectedOperation} support."
-                    |> fun vertexType -> markAsVisited vertexType children
+                | Application(_) -> pathConditionVertexType.StandardFunctionApplication
+                | Cast(_, _) -> pathConditionVertexType.Cast
+                | Combine -> pathConditionVertexType.Combine
 
-                | Application(_) -> markAsVisited pathConditionVertexType.StandardFunctionApplication children
-                | Cast(_, _) -> markAsVisited pathConditionVertexType.Cast children
-                | Combine -> markAsVisited pathConditionVertexType.Combine children
-            | Struct(fields, _) ->
-                let children = ResizeArray<uint<pathConditionVertexId>>()
+            PathConditionVertex(id, vertexType, children)
+        | Struct(fields, _) ->
+            let children = PersistentDict.toSeq fields |> Seq.map (snd >> idOf) |> Seq.sort |> Array.ofSeq
+            PathConditionVertex(id, pathConditionVertexType.Struct, children)
+        | HeapRef(_, _) -> PathConditionVertex(id, pathConditionVertexType.HeapRef, [||])
+        | Ref(_) -> PathConditionVertex(id, pathConditionVertexType.Ref, [||])
+        | Ptr(_, _, offset) -> PathConditionVertex(id, pathConditionVertexType.Ptr, [| idOf offset |])
+        | Slice(t, slices) ->
+            let children = ResizeArray<uint<pathConditionVertexId>> [| idOf t |]
 
-                for _, t in PersistentDict.toSeq fields do
-                    handleChild t children
+            for s, e, p, _ in slices do
+                children.Add(idOf s)
+                children.Add(idOf e)
+                children.Add(idOf p)
 
-                markAsVisited pathConditionVertexType.Struct (children.ToArray())
-            | HeapRef(_, _) -> markAsVisited pathConditionVertexType.HeapRef [||]
-            | Ref(_) -> markAsVisited pathConditionVertexType.Ref [||]
-            | Ptr(_, _, t) ->
-                let children = ResizeArray<uint<pathConditionVertexId>> [||]
-                handleChild t children
-                markAsVisited pathConditionVertexType.Ptr (children.ToArray())
-            | Slice(t, listOfTuples) ->
-                let children = ResizeArray<uint<pathConditionVertexId>> [||]
-                handleChild t children
+            PathConditionVertex(id, pathConditionVertexType.Slice, children.ToArray())
+        | Ite(_) -> PathConditionVertex(id, pathConditionVertexType.Ite, [||])
 
-                for t1, t2, t3, _ in listOfTuples do
-                    handleChild t1 children
-                    handleChild t2 children
-                    handleChild t3 children
+    // The ID counter is monotonic across calls, so appending in newSigs
+    // order keeps the accumulated vertices in ID order.
+    let pathConditionDelta = ResizeArray<PathConditionVertex>()
 
-                markAsVisited pathConditionVertexType.Slice (children.ToArray())
-            | Ite(_) -> markAsVisited pathConditionVertexType.Ite [||]
+    for s in newSigs do
+        pathConditionDelta.Add(buildVertex termsWithId.[s] representative.[s])
 
     pathConditionDelta
 
-let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates processedPathConditionVertices termsWithId =
+let collectGameState
+    (basicBlocks: ResizeArray<BasicBlock>)
+    filterStates
+    (sigMemo: Dictionary<Core.term, termSig>)
+    (termsWithId: Dictionary<termSig, uint<pathConditionVertexId>>)
+    =
+    // Every collection is iterated in a stable semantic order so that the
+    // serialized result is a pure function of the logical state.
+    let basicBlocks =
+        basicBlocks
+        |> Seq.sortBy basicBlockKey
+        |> ResizeArray
 
     let vertices = ResizeArray<_>()
     let allStates = HashSet<_>()
@@ -489,13 +604,18 @@ let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates process
     for currentBasicBlock in basicBlocks do
         let states =
             currentBasicBlock.AssociatedStates
+            |> Seq.sortBy (fun (s: IGraphTrackableState) -> s.Id)
             |> Seq.map (fun (s: IGraphTrackableState) ->
-                let pathCondition = s.PathCondition |> PC.toSeq
+                let pathCondition = s.PathCondition |> PC.toSeq |> Seq.sortBy (termSig sigMemo)
 
                 for term in pathCondition do
-                    pathConditionDelta.AddRange(collectPathCondition term termsWithId processedPathConditionVertices)
+                    pathConditionDelta.AddRange(collectPathCondition term sigMemo termsWithId)
 
-                let pathCondition = [| for p in pathCondition -> termsWithId.[p] |]
+                let pathCondition =
+                    pathCondition
+                    |> Seq.map (fun t -> termsWithId.[termSig sigMemo t])
+                    |> Seq.sort
+                    |> Array.ofSeq
 
                 State(
                     s.Id,
@@ -507,9 +627,10 @@ let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates process
                     s.VisitedNotCoveredVerticesOutOfZone,
                     s.StepWhenMovedLastTime,
                     s.InstructionsVisitedInCurrentBlock,
-                    s.History |> Seq.map (fun kvp -> kvp.Value) |> Array.ofSeq,
+                    s.History |> Seq.map (fun kvp -> kvp.Value) |> Array.ofSeq |> Array.sortBy (fun h -> h.GraphVertexId),
                     s.Children
                     |> Array.map (fun s -> s.Id)
+                    |> Array.sort
                     |> (fun x ->
                         if filterStates then
                             Array.filter activeStates.Contains x
@@ -545,7 +666,9 @@ let collectGameState (basicBlocks: ResizeArray<BasicBlock>) filterStates process
                 GameMapEdge(basicBlock.Id, targetBasicBlock.Id, GameEdgeLabel(int outgoingEdges.Key))
                 |> edges.Add
 
-    GameState(vertices.ToArray(), allStates |> Array.ofSeq, pathConditionDelta.ToArray(), edges.ToArray())
+    let edges = edges |> ResizeArray.toArray |> Array.sortBy (fun e -> (e.VertexFrom, e.VertexTo, e.Label.Token))
+
+    GameState(vertices.ToArray(), allStates |> Array.ofSeq |> Array.sort, pathConditionDelta.ToArray(), edges)
 
 let collectGameStateDelta () =
     let basicBlocks = HashSet<_>(Application.applicationGraphDelta.TouchedBasicBlocks)
@@ -556,7 +679,7 @@ let collectGameStateDelta () =
             let added = basicBlocks.Add(basicBlock)
             ()
 
-    collectGameState (ResizeArray basicBlocks) false pathConditionVertices termsWithId
+    collectGameState (ResizeArray basicBlocks) false (Dictionary<Core.term, termSig>()) termsWithId
 
 let dumpGameState fileForResultWithoutExtension (movedStateId: uint<stateId>) =
     let basicBlocks = ResizeArray<_>()
@@ -567,7 +690,7 @@ let dumpGameState fileForResultWithoutExtension (movedStateId: uint<stateId>) =
             basicBlocks.Add(basicBlock)
 
     let gameState =
-        collectGameState basicBlocks true (HashSet<Core.term>()) (Dictionary<Core.term, uint<pathConditionVertexId>>())
+        collectGameState basicBlocks true (Dictionary<Core.term, termSig>()) (Dictionary<termSig, uint<pathConditionVertexId>>())
 
     let statesInfoToDump = collectStatesInfoToDump basicBlocks
     let gameStateJson = JsonSerializer.Serialize gameState
